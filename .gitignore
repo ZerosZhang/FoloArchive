@@ -1,0 +1,16 @@
+# 虚拟环境
+.venv/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 敏感配置（API Key）
+src/config.json
+
+# 本地数据（SQLite 索引、文章列表、下载/转换输出）
+result/
+
+# 系统文件
+Thumbs.db
+.DS_Store

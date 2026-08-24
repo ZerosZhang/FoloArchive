@@ -31,4 +31,4 @@
 
 ## 新增来源
 
-见 `doc/src/strategies.md`。
+见 `doc/strategies.md`。

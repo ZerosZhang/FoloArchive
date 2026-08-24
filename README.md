@@ -79,16 +79,16 @@ cp src/config.example.json src/config.json
 
 - 文章保存为 `「来源」标题.md`，Obsidian 可直接索引
 - 每日自动生成按来源分组的总结文件 `YYYY年MM月DD日.md`
-- 支持 24 种来源解析策略，详见 [doc/src/strategies.md](doc/src/strategies.md)
+- 支持 24 种来源解析策略，详见 [doc/strategies.md](doc/strategies.md)
 
 ## 📚 文档
 
 | 模块 | 文档 |
 |------|------|
-| 全部模块说明 | [doc/src/](doc/src/) |
-| 来源策略 | [doc/src/strategies.md](doc/src/strategies.md) |
-| 核心流程 | [doc/src/archive_core.md](doc/src/archive_core.md) |
-| GUI | [doc/src/archive_gui.md](doc/src/archive_gui.md) |
+| 全部模块说明 | [doc/](doc/) |
+| 来源策略 | [doc/strategies.md](doc/strategies.md) |
+| 核心流程 | [doc/archive_core.md](doc/archive_core.md) |
+| GUI | [doc/archive_gui.md](doc/archive_gui.md) |
 
 ## 🧩 支持的来源
 

@@ -87,7 +87,11 @@ class TextExtractor(HTMLParser):
             self._link_url = attrs_dict.get("href", "")
             self._link_text = ""
         elif tag == "img":
-            src = attrs_dict.get("src", "")
+            # 懒加载图片：src 为空时回退 data-src / data-lazy-src；仍无图源则忽略
+            src = (attrs_dict.get("src", "") or attrs_dict.get("data-src", "")
+                   or attrs_dict.get("data-lazy-src", ""))
+            if not src:
+                return
             alt = attrs_dict.get("alt", "")
             self._append_text(f"\n![{alt}]({src})\n")
         elif tag == "br":
@@ -230,6 +234,10 @@ _PLACEHOLDER_PREFIX = "a1b2c3d4"
 def html_to_md(html_text):
     # 存储代码块占位符
     code_blocks = []
+
+    # 预处理：删除 script / style 块（正文中的广告 JS、内联样式等不应进入 Markdown）
+    html_text = re.sub(r'<script[^>]*>.*?</script>', '', html_text, flags=re.DOTALL)
+    html_text = re.sub(r'<style[^>]*>.*?</style>', '', html_text, flags=re.DOTALL)
 
     # 预处理：将 chroma 代码块转换为占位符
     # 结构：<div class=highlight><div class=chroma><table class=lntable>

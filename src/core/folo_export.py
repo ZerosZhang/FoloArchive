@@ -8,6 +8,7 @@ Folo 未读文章列表获取脚本（阶段 1）
 """
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -44,10 +45,15 @@ def run_bash(cmd):
     """运行 bash 命令"""
     bash_path = find_bash()
     env_cmd = f'export PATH="{NODE_PATH}:$PATH" && {cmd}'
+    kwargs = {}
+    # Windows 下禁止子进程弹出控制台窗口（GUI 模式避免黑窗口闪烁）
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     result = subprocess.run(
         [bash_path, "-c", env_cmd],
         capture_output=True, text=True,
-        encoding="utf-8", errors="replace"
+        encoding="utf-8", errors="replace",
+        **kwargs
     )
     return result
 

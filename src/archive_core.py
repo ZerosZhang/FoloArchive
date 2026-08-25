@@ -20,10 +20,10 @@ from utils import format_duration, TEMP_DIR, OUTPUT_BASE_DIR
 
 # 步骤定义：(编号, 名称, 描述)
 STEPS = [
-    (1, "fetch", "获取未读文章列表（含认证）"),
+    (1, "fetch", "获取 folo 的未读文章列表"),
     (2, "download", "下载网页并优化文件名"),
-    (3, "convert", "HTML → Markdown 转换"),
-    (4, "summarize", "AI 生成文章总结"),
+    (3, "convert", "Markdown 格式转换"),
+    (4, "summarize", "AI 生成内容摘要"),
     (5, "import", "导入文章到数据库"),
 ]
 

@@ -80,7 +80,7 @@ class ArchiveGUI(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Folo 文章归档")
-        self.setMinimumSize(900, 700)
+        self.setFixedSize(900, 700)
 
         # 状态变量
         self.is_running = False
@@ -201,6 +201,11 @@ class ArchiveGUI(QMainWindow):
         control_layout.addWidget(self.start_btn)
         control_layout.addWidget(self.stop_btn)
         control_layout.addWidget(clear_btn)
+
+        # 进度提示标签放在按钮同一行（右侧）
+        self.progress_label = QLabel("就绪")
+        control_layout.addWidget(self.progress_label)
+
         control_layout.addStretch()
 
         main_layout.addLayout(control_layout)
@@ -209,9 +214,6 @@ class ArchiveGUI(QMainWindow):
         self.progress_bar = QProgressBar()
         self.progress_bar.setMaximum(100)
         main_layout.addWidget(self.progress_bar)
-
-        self.progress_label = QLabel("就绪")
-        main_layout.addWidget(self.progress_label)
 
         # ===== 日志区域 =====
         log_group = QGroupBox("执行日志")

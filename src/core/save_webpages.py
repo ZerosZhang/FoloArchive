@@ -30,6 +30,11 @@ SCRIPT_DIR = Path(__file__).parent
 # 需要使用浏览器自动化的网站（有 WAF 或反爬机制）
 _BROWSER_SITES = ["huxiu.com"]
 
+# 伪装成浏览器反而被 WAF 拦截的网站（如 mobius.blog 的 a8c CDN 会校验 UA 与
+# TLS 指纹一致，非浏览器请求报 403），改用普通客户端 UA 即可放行完整正文
+_PLAIN_UA_SITES = ["mobius.blog"]
+_PLAIN_UA = "python-requests/2.31.0"
+
 
 def format_datetime(dt_str):
     """将 ISO 格式时间转换为 2026年07月04日 08:00:40 格式"""
@@ -332,6 +337,10 @@ def fetch_url(url, timeout=30, retries=1):
             headers['Referer'] = ref
             headers['Sec-Fetch-Site'] = 'same-origin'
             break
+
+    # mobius.blog 等站点用普通客户端 UA，避免被 WAF 误判为伪装浏览器而 403
+    if any(site in domain.lower() for site in _PLAIN_UA_SITES):
+        headers['User-Agent'] = _PLAIN_UA
 
     last_error = None
     for attempt in range(retries + 1):

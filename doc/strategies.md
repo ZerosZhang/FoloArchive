@@ -33,7 +33,8 @@ src/strategies/
 ├── huxiu.py          # 虎嗅
 ├── zishu.py          # 子舒的博客
 ├── mobius.py         # 莫比乌斯
-└── wang_zhiyong.py   # 王志勇-和平海底
+├── wang_zhiyong.py   # 王志勇-和平海底
+└── ezindie.py        # 独立开发变现周刊
 ```
 
 ## base.py 核心

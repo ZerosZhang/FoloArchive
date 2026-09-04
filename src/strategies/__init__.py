@@ -27,3 +27,4 @@ from . import huxiu
 from . import zishu
 from . import mobius
 from . import wang_zhiyong
+from . import ezindie

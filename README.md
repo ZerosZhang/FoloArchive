@@ -45,7 +45,7 @@ Folo 适合**快速浏览**，但阅读之外的需求它并不负责：文章�
 ### 环境要求
 
 - Python 3.10+
-- Node.js v18+（获取文章列表依赖 `folocli`）
+- Node.js v24+（获取文章列表依赖 `folocli`；v24 的 `NODE_USE_ENV_PROXY` 才能让 fetch 走系统代理）
 - Folo CLI 已登录：`npx folocli@latest login`
 
 ### 步骤

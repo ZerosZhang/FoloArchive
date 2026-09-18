@@ -18,7 +18,7 @@ import sys
 import time
 import urllib.request
 
-from utils import TEMP_DIR
+from utils import TEMP_DIR, find_npx, build_node_env
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -49,37 +49,6 @@ def format_datetime(dt_str):
     except (ValueError, AttributeError):
         return dt_str
 
-# Node.js 路径
-NODE_PATH = "/c/Program Files/nodejs"
-
-
-def find_bash():
-    """在 Windows 上自动查找 Git Bash 路径"""
-    from shutil import which
-    found = which("bash")
-    if found:
-        return found
-    candidates = [
-        r"C:\Program Files\Git\bin\bash.exe",
-        r"C:\Program Files (x86)\Git\bin\bash.exe",
-    ]
-    for p in candidates:
-        if os.path.isfile(p):
-            return p
-    raise FileNotFoundError("找不到 bash")
-
-
-def run_bash(cmd):
-    """运行 bash 命令"""
-    bash_path = find_bash()
-    env_cmd = f'export PATH="{NODE_PATH}:$PATH" && {cmd}'
-    result = subprocess.run(
-        [bash_path, "-c", env_cmd],
-        capture_output=True, text=True,
-        encoding="utf-8", errors="replace"
-    )
-    return result
-
 
 def extract_json(text):
     """从输出中提取 JSON"""
@@ -94,7 +63,17 @@ def extract_json(text):
 
 def run_folo(args):
     """运行 Folo CLI 命令"""
-    result = run_bash(f"npx --yes folocli@latest {' '.join(args)}")
+    kwargs = {}
+    # Windows 下禁止子进程弹出控制台窗口（GUI 模式避免黑窗口闪烁）
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    result = subprocess.run(
+        [find_npx(), "--yes", "folocli@latest", *args],
+        capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+        env=build_node_env(),
+        **kwargs
+    )
     stdout_text = result.stdout or ""
     json_text = extract_json(stdout_text)
     try:

@@ -6,6 +6,7 @@
 
 import io
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -43,6 +44,73 @@ def fix_encoding():
             sys.stdout.reconfigure(line_buffering=True)
         if sys.stderr is not None:
             sys.stderr.reconfigure(line_buffering=True)
+
+
+def get_system_proxy():
+    """获取系统代理地址，没有则返回 None
+
+    优先取环境变量，其次读 Windows 注册表的系统代理设置。
+    用途：Node 的 fetch 不读系统代理，需要显式注入 HTTP(S)_PROXY。
+    """
+    for key in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        value = os.environ.get(key)
+        if value:
+            return value
+
+    if sys.platform != "win32":
+        return None
+
+    try:
+        import winreg
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+        ) as key:
+            if not winreg.QueryValueEx(key, "ProxyEnable")[0]:
+                return None
+            server = winreg.QueryValueEx(key, "ProxyServer")[0]
+    except OSError:
+        return None
+
+    if not server:
+        return None
+    if "://" not in server:
+        server = f"http://{server}"
+    return server
+
+
+# Node.js 的 npx 可执行入口（Windows 下为 npx.cmd）
+NPX_PATH = r"C:\Program Files\nodejs\npx.cmd"
+
+
+def find_npx():
+    """定位 npx 可执行文件
+
+    直接调用 npx.cmd，无需借助 bash / PowerShell 等任何 shell。
+    """
+    from shutil import which
+
+    found = which("npx.cmd") or which("npx")
+    if found:
+        return found
+    if os.path.isfile(NPX_PATH):
+        return NPX_PATH
+    raise FileNotFoundError("找不到 npx，请安装 Node.js 或将 npm 加入 PATH")
+
+
+def build_node_env():
+    """构造运行 Node 子进程的环境变量
+
+    Node 的 fetch 默认不读系统代理，需显式注入 HTTP(S)_PROXY；
+    NODE_USE_ENV_PROXY 让 fetch 认这些变量（需 Node 24+）。
+    """
+    env = os.environ.copy()
+    proxy = get_system_proxy()
+    if proxy:
+        env["HTTP_PROXY"] = proxy
+        env["HTTPS_PROXY"] = proxy
+        env["NODE_USE_ENV_PROXY"] = "1"
+    return env
 
 
 def load_config():

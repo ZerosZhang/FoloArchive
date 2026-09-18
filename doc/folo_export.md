@@ -12,10 +12,11 @@
 
 ## 行为要点
 
-- 通过 `subprocess.run(["bash", "-c", ...])` 执行 `npx folocli@latest`
-- `NODE_PATH` 硬编码为 `/c/Program Files/nodejs`（Windows Git Bash 环境）
-- 自动查找 Git Bash（`shutil.which("bash")`）
-- `run_folo()` 从 stdout/stderr 中提取 JSON，兼容 WSL 警告等杂讯
+- 直接 `subprocess.run([find_npx(), "--yes", "folocli@latest", ...])`，不经过任何 shell
+- `find_npx()` 定位 `npx.cmd`（PATH 优先，兜底 `C:\Program Files\nodejs\npx.cmd`）
+- 子进程环境用 `build_node_env()` 注入 `HTTP(S)_PROXY` + `NODE_USE_ENV_PROXY=1`（Node 的 fetch 不读系统代理）
+- Windows 下加 `CREATE_NO_WINDOW`，避免 GUI 模式闪黑窗
+- `run_folo()` 从 stdout/stderr 中提取 JSON，兼容 npx 提示等杂讯
 - 只获取"长文"类型（`view=0`），不包括短视频
 - 保存完成后自动标记所有文章为已读
 - 需要先登录 Folo CLI（`npx folocli@latest login`）

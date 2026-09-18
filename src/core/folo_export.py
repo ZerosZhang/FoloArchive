@@ -8,58 +8,20 @@ Folo 未读文章列表获取脚本（阶段 1）
 """
 
 import json
-import os
 import re
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
-from utils import TEMP_DIR
+from utils import TEMP_DIR, find_npx, build_node_env
 
 # 配置
-NODE_PATH = "/c/Program Files/nodejs"
 SCRIPT_DIR = Path(__file__).parent
 
 
-def find_bash():
-    """在 Windows 上自动查找 Git Bash 路径"""
-    from shutil import which
-    # 优先检查 PATH 中是否有 bash
-    found = which("bash")
-    if found:
-        return found
-    # 常见 Git 安装路径
-    candidates = [
-        r"C:\Program Files\Git\bin\bash.exe",
-        r"C:\Program Files (x86)\Git\bin\bash.exe",
-    ]
-    import os
-    for p in candidates:
-        if os.path.isfile(p):
-            return p
-    raise FileNotFoundError("找不到 bash，请安装 Git for Windows 或将 bash 加入 PATH")
-
-
-def run_bash(cmd):
-    """运行 bash 命令"""
-    bash_path = find_bash()
-    env_cmd = f'export PATH="{NODE_PATH}:$PATH" && {cmd}'
-    kwargs = {}
-    # Windows 下禁止子进程弹出控制台窗口（GUI 模式避免黑窗口闪烁）
-    if os.name == "nt":
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-    result = subprocess.run(
-        [bash_path, "-c", env_cmd],
-        capture_output=True, text=True,
-        encoding="utf-8", errors="replace",
-        **kwargs
-    )
-    return result
-
-
 def extract_json(text):
-    """从可能包含 WSL 警告、npx 提示等杂讯的文本中提取 JSON 对象"""
+    """从可能包含 npx 提示等杂讯的文本中提取 JSON 对象"""
     if not text:
         return None
     # 找到第一个 '{' 和最后一个 '}'
@@ -72,7 +34,17 @@ def extract_json(text):
 
 def run_folo(args):
     """运行 Folo CLI 命令，返回解析后的 JSON 字典"""
-    result = run_bash(f"npx --yes folocli@latest {' '.join(args)}")
+    kwargs = {}
+    # Windows 下禁止子进程弹出控制台窗口（GUI 模式避免黑窗口闪烁）
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    result = subprocess.run(
+        [find_npx(), "--yes", "folocli@latest", *args],
+        capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+        env=build_node_env(),
+        **kwargs
+    )
     stdout_text = result.stdout or ""
     stderr_text = result.stderr or ""
 
@@ -114,12 +86,12 @@ def check_auth():
     print()
     print("请使用以下方式之一登录 Folo CLI：")
     print("  1. 交互式登录（推荐）：")
-    print(r"       bash -c 'export PATH=\"/c/Program Files/nodejs:$PATH\" && npx --yes folocli@latest login'")
+    print("       npx --yes folocli@latest login")
     print("  2. 使用 Token 登录：")
-    print(r"       bash -c 'export PATH=\"/c/Program Files/nodejs:$PATH\" && npx --yes folocli@latest login --token <your-token>'")
+    print("       npx --yes folocli@latest login --token <your-token>")
     print("  3. 设置环境变量 FOLO_TOKEN（当前终端有效）：")
-    print("       set FOLO_TOKEN=<your-token>    (cmd)")
     print("       $env:FOLO_TOKEN='<your-token>' (PowerShell)")
+    print("       set FOLO_TOKEN=<your-token>    (cmd)")
     print()
     return False
 

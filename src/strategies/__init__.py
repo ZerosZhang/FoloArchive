@@ -5,6 +5,7 @@
 from .base import BaseStrategy, register_strategy, resolve_strategy, _STRATEGIES
 from . import suiyan
 from . import sspai
+from . import appinn_forum
 from . import appinn
 from . import iplaysoft
 from . import ruanyifeng

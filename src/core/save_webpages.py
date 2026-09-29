@@ -35,6 +35,10 @@ _BROWSER_SITES = ["huxiu.com"]
 _PLAIN_UA_SITES = ["mobius.blog"]
 _PLAIN_UA = "python-requests/2.31.0"
 
+# 走系统代理会握手失败的网站（meta.appinn.net 经部分代理节点会
+# SSL: UNEXPECTED_EOF_WHILE_READING），这些域名改直连
+_NO_PROXY_SITES = ["meta.appinn.net"]
+
 
 def format_datetime(dt_str):
     """将 ISO 格式时间转换为 2026年07月04日 08:00:40 格式"""
@@ -210,6 +214,10 @@ def sanitize_filename(name):
 _cookie_jar = http.cookiejar.CookieJar()
 _opener = urllib.request.build_opener(
     urllib.request.HTTPCookieProcessor(_cookie_jar))
+# 直连 opener（不使用系统代理），供 _NO_PROXY_SITES 使用
+_direct_opener = urllib.request.build_opener(
+    urllib.request.HTTPCookieProcessor(_cookie_jar),
+    urllib.request.ProxyHandler({}))
 
 
 def _needs_browser(url):
@@ -329,7 +337,9 @@ def fetch_url(url, timeout=30, retries=1):
             safe_chars = ':/?#[]@!$&()*+,;='
             encoded_url = quote(url, safe=safe_chars)
             req = urllib.request.Request(encoded_url, headers=headers)
-            with _opener.open(req, timeout=timeout) as response:
+            opener = _direct_opener if any(
+                site in domain.lower() for site in _NO_PROXY_SITES) else _opener
+            with opener.open(req, timeout=timeout) as response:
                 # 尝试读取并处理编码
                 html_bytes = response.read()
 

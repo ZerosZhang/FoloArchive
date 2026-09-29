@@ -12,6 +12,7 @@ src/strategies/
 ├── base.py           # BaseStrategy 基类、注册表、resolve_strategy、_find_matching_close
 ├── suiyan.py         # 碎言
 ├── sspai.py          # 少数派
+├── appinn_forum.py   # 小众软件官方论坛（meta.appinn.net，Discourse）
 ├── appinn.py         # 小众软件
 ├── iplaysoft.py      # 异次元软件世界
 ├── ruanyifeng.py     # 阮一峰的网络日志

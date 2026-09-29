@@ -22,14 +22,15 @@ class SspaiStrategy(BaseStrategy):
         if "少数派" in filename_hint:
             return True
         # 域名 + 结构标记双重匹配，避免其他站点的 article-body 被误判
+        # article-body 可能带附加类名（如 "article-body transparent"），用前缀匹配
         return ("sspai.com" in html_text and
-                ('class="article-body"' in html_text or
+                ('class="article-body' in html_text or
                  'class="prime__story__body__wrapper"' in html_text))
 
     @classmethod
     def extract_body(cls, html_text):
         # 优先提取 article-body
-        m = re.search(r'<div[^>]*class="article-body"[^>]*>(.*?)</article>', html_text, re.DOTALL)
+        m = re.search(r'<div[^>]*class="article-body[^"]*"[^>]*>(.*?)</article>', html_text, re.DOTALL)
         if m:
             return m.group(1)
 

@@ -28,6 +28,8 @@
 - 默认不覆盖已存在文件，加 `--overwrite` 强制覆盖
 - 文件名格式 `「来源」标题.html`，非法字符自动去除，同名自动追加 `_1`
 - 失败原因回调为干净文本（`下载失败: HTTP 404: Not Found`），无 HTML 注释与换行
+- `_NO_PROXY_SITES` 中的域名（如 `meta.appinn.net`）绕过系统代理直连——部分代理节点与其 TLS 握手会报 `SSL: UNEXPECTED_EOF_WHILE_READING`
+- `_PLAIN_UA_SITES` 中的域名（如 `mobius.blog`）改用普通客户端 UA，避免被 WAF 误判为伪装浏览器
 
 ## 图片防盗链
 

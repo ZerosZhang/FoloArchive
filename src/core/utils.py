@@ -13,14 +13,14 @@ from pathlib import Path
 # =============================================================================
 # 目录布局（结构变更后路径的唯一事实来源）
 #   Python/          工具包根
-#   ├── result/      数据（articles.db、temp_data/）
+#   ├── result/      数据（成品 HTML + temp_data/）
 #   ├── src/         源码（入口 + core/ + strategies/）
 #   └── .venv/       虚拟环境
 # =============================================================================
 PYTHON_ROOT = Path(__file__).resolve().parent.parent.parent  # Python/
 RESULT_DIR = PYTHON_ROOT / "result"
 TEMP_DIR = RESULT_DIR / "temp_data"                          # 文章列表 JSON
-DB_PATH = RESULT_DIR / "articles.db"                         # SQLite 索引
+RAW_DIR = TEMP_DIR / "raw"                                   # 原始下载 HTML（步骤 2 → 步骤 3 中间产物）
 CONFIG_PATH = PYTHON_ROOT / "src" / "config.json"            # DeepSeek API 配置
 OUTPUT_BASE_DIR = RESULT_DIR                                 # 文章下载/转换输出目录（result/）
 

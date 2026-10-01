@@ -35,7 +35,7 @@ def extract_json(text):
 def run_folo(args):
     """运行 Folo CLI 命令，返回解析后的 JSON 字典"""
     kwargs = {}
-    # Windows 下禁止子进程弹出控制台窗口（GUI 模式避免黑窗口闪烁）
+    # Windows 下禁止子进程弹出控制台窗口（避免黑窗口闪烁）
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     result = subprocess.run(
@@ -70,13 +70,13 @@ def run_folo(args):
 
 
 def check_auth():
-    """检查 Folo CLI 是否已登录。返回 True/False"""
+    """检查 Folo CLI 是否已登录。返回 (是否已登录, 失败原因)"""
     result = run_folo(["whoami"])
     if result and result.get("ok"):
         user = result.get("data", {}).get("user", {})
         name = user.get("name") or user.get("email") or "未知用户"
         print(f"  已登录: {name}")
-        return True
+        return True, None
 
     error = result.get("error", {}) if result else {}
     code = error.get("code", "UNKNOWN")
@@ -93,14 +93,20 @@ def check_auth():
     print("       $env:FOLO_TOKEN='<your-token>' (PowerShell)")
     print("       set FOLO_TOKEN=<your-token>    (cmd)")
     print()
-    return False
+    return False, f"[{code}] {msg}"
 
 
 def fetch_unread_articles():
-    """分页获取所有未读文章（view=0）"""
+    """分页获取所有未读文章（view=0）。
+
+    返回 (文章条目列表, 失败原因)：
+      - 正常抓取（含没有未读文章）时失败原因为 None
+      - CLI 无响应 / 返回错误时给出可读原因
+    """
     all_entries = []
     cursor = None
     page = 1
+    fetch_error = None
 
     print("正在从 Folo 获取未读文章列表...")
 
@@ -111,6 +117,7 @@ def fetch_unread_articles():
 
         result = run_folo(args)
         if not result:
+            fetch_error = f"第 {page} 页 Folo CLI 无响应或输出异常"
             print(f"  [!] 获取第 {page} 页失败（CLI 无响应或输出异常）")
             break
 
@@ -118,6 +125,7 @@ def fetch_unread_articles():
             error = result.get("error", {})
             code = error.get("code", "UNKNOWN")
             msg = error.get("message", "未知错误")
+            fetch_error = f"第 {page} 页 [{code}] {msg}"
             print(f"  [!] 获取第 {page} 页失败: [{code}] {msg}")
             break
 
@@ -139,7 +147,7 @@ def fetch_unread_articles():
         page += 1
 
     print(f"共获取 {len(all_entries)} 篇文章")
-    return all_entries
+    return all_entries, fetch_error
 
 
 def build_article_list(entries):
@@ -183,8 +191,11 @@ def sanitize_filename(name):
 
 def export_articles(skip_auth_check=False):
     """
-    获取未读文章列表，保存 JSON，标记已读。返回 (today, article_list, output_path)
-    
+    获取未读文章列表，保存 JSON，标记已读。
+    返回 (today, article_list, output_path, failure_reason)
+
+    failure_reason: 认证失败或抓取异常时为可读原因；正常（含没有未读文章）时为 None
+
     Args:
         skip_auth_check: 若已在外部检查过认证，可设为 True 避免重复检查
     """
@@ -194,17 +205,18 @@ def export_articles(skip_auth_check=False):
     # 0. 前置认证检查（可选跳过）
     if not skip_auth_check:
         print("[1/3] 检查 Folo CLI 认证状态...")
-        if not check_auth():
-            return today, [], None
+        authed, auth_error = check_auth()
+        if not authed:
+            return today, [], None, f"认证失败（Folo CLI 未登录或 Token 失效）: {auth_error}"
         print()
 
     # 1. 获取未读文章列表
     step_label = "[2/3]" if not skip_auth_check else "[1/2]"
     print(f"{step_label} 获取未读文章列表...")
-    raw_entries = fetch_unread_articles()
+    raw_entries, fetch_error = fetch_unread_articles()
     if not raw_entries:
         print("[!] 没有获取到文章，任务结束")
-        return today, [], None
+        return today, [], None, fetch_error
     print()
 
     # 2. 整理为简洁列表
@@ -227,7 +239,7 @@ def export_articles(skip_auth_check=False):
         err = mark_result.get("error", {}).get("message", "未知错误") if mark_result else "无响应"
         print(f"  [!] 标记已读失败: {err}")
 
-    return today, article_list, output_path
+    return today, article_list, output_path, fetch_error
 
 
 def main():
@@ -235,9 +247,12 @@ def main():
     print(f"今天的日期: {today}")
     print()
 
-    today, article_list, output_path = export_articles()
+    today, article_list, output_path, failure_reason = export_articles()
     if not article_list:
-        print("\n没有未读文章或获取失败，任务结束")
+        if failure_reason:
+            print(f"\n获取文章列表失败: {failure_reason}")
+        else:
+            print("\n没有未读文章，任务结束")
         return
 
     print(f"\n{'='*50}")

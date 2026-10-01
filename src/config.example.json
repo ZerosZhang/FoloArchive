@@ -1,5 +1,16 @@
 {
   "api_key": "sk-请替换为你的API密钥",
   "base_url": "https://api.deepseek.com",
-  "model": "deepseek-v4-flash"
+  "model": "deepseek-v4-flash",
+  "schedule": { "enabled": true, "time": "08:00" },
+  "mail": {
+    "enabled": false,
+    "smtp_host": "smtp.qq.com",
+    "smtp_port": 465,
+    "use_ssl": true,
+    "username": "you@example.com",
+    "password": "邮箱授权码",
+    "from": "you@example.com",
+    "to": ["you@example.com"]
+  }
 }

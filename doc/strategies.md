@@ -2,7 +2,7 @@
 
 ## 职责
 
-HTML → Markdown 的来源识别与正文提取策略。每个来源一个独立模块，按注册顺序匹配（**第一个匹配生效**）。
+原始 HTML 的来源识别与正文提取策略（服务于干净 HTML 渲染）。每个来源一个独立模块，按注册顺序匹配（**第一个匹配生效**），当前共 **22** 个策略。
 
 ## 结构
 
@@ -12,7 +12,6 @@ src/strategies/
 ├── base.py           # BaseStrategy 基类、注册表、resolve_strategy、_find_matching_close
 ├── suiyan.py         # 碎言
 ├── sspai.py          # 少数派
-├── appinn_forum.py   # 小众软件官方论坛（meta.appinn.net，Discourse）
 ├── appinn.py         # 小众软件
 ├── iplaysoft.py      # 异次元软件世界
 ├── ruanyifeng.py     # 阮一峰的网络日志
@@ -20,22 +19,19 @@ src/strategies/
 ├── endler.py         # Matthias Endler
 ├── echosoar.py       # 偷懒爱好者周刊
 ├── ftium4.py         # 龙爪槐守望者
-├── juya.py           # 橘鸦AI早报
 ├── baoyu.py          # 宝玉的博客
 ├── tumeng.py         # 土猛的员外
 ├── kr36.py           # 36氪
-├── oschina.py        # 开源中国-软件资讯
 ├── down423.py        # 423Down
-├── product_hunt.py   # Product Hunt 热门
 ├── tw93_weekly.py    # 潮流周刊
-├── hexo_blog.py      # Hexo 博客（通用）
-├── hello_github.py   # HelloGitHub 精选
+├── hexo_blog.py      # Hexo 博客（通用兜底）
+├── hello_github.py   # HelloGithub - 精选开源项目
 ├── coldwind.py       # 寒流の编程笔记
-├── huxiu.py          # 虎嗅
 ├── zishu.py          # 子舒的博客
 ├── mobius.py         # 莫比乌斯
 ├── wang_zhiyong.py   # 王志勇-和平海底
-└── ezindie.py        # 独立开发变现周刊
+├── ezindie.py        # 独立开发变现周刊
+└── yu_gao.py         # Blog Yu Gao
 ```
 
 ## base.py 核心

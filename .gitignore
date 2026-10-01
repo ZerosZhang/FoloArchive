@@ -5,7 +5,7 @@
 __pycache__/
 *.pyc
 
-# 敏感配置（API Key）
+# 敏感配置（API Key / 邮箱授权码）
 src/config.json
 
 # 本地数据（SQLite 索引、文章列表、下载/转换输出）

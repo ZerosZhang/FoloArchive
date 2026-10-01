@@ -15,9 +15,10 @@
 - 直接 `subprocess.run([find_npx(), "--yes", "folocli@latest", ...])`，不经过任何 shell
 - `find_npx()` 定位 `npx.cmd`（PATH 优先，兜底 `C:\Program Files\nodejs\npx.cmd`）
 - 子进程环境用 `build_node_env()` 注入 `HTTP(S)_PROXY` + `NODE_USE_ENV_PROXY=1`（Node 的 fetch 不读系统代理）
-- Windows 下加 `CREATE_NO_WINDOW`，避免 GUI 模式闪黑窗
+- Windows 下加 `CREATE_NO_WINDOW`，避免子进程弹出控制台窗口闪烁
 - `run_folo()` 从 stdout/stderr 中提取 JSON，兼容 npx 提示等杂讯
 - 只获取"长文"类型（`view=0`），不包括短视频
+- `export_articles()` 返回 4 元组 `(today, article_list, output_path, failure_reason)`：认证失败或抓取异常时 `failure_reason` 为可读原因，正常（含没有未读文章）为 `None`
 - 保存完成后自动标记所有文章为已读
 - 需要先登录 Folo CLI（`npx folocli@latest login`）
 

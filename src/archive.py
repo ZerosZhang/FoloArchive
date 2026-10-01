@@ -7,7 +7,7 @@ Folo 文章一键归档脚本（CLI）
 用法:
     python archive.py                # 完整执行所有步骤
     python archive.py --start-step 4 # 从第 4 步开始（跳过 1-3）
-    python archive.py --only-step 5  # 只执行第 5 步
+    python archive.py --only-step 4  # 只执行第 4 步
     python archive.py --list-steps   # 列出所有步骤
 """
 
@@ -36,7 +36,7 @@ def parse_args():
         epilog="""示例:
   python archive.py                # 完整执行所有步骤
   python archive.py --start-step 4 # 从第 4 步开始（跳过 1-3）
-  python archive.py --only-step 5  # 只执行第 5 步
+  python archive.py --only-step 4  # 只执行第 4 步
   python archive.py --list-steps   # 列出所有步骤"""
     )
     parser.add_argument("--start-step", type=int, metavar="N",
@@ -48,6 +48,32 @@ def parse_args():
     parser.add_argument("--date", type=str, metavar="YYYY年MM月DD日",
                         help="指定日期（默认为今天）")
     return parser.parse_args()
+
+
+def notify_failures(today, result):
+    """归档存在失败时发送通知邮件（复用 core/notify.py；未配置则只提示，不影响退出码）"""
+    failures = list(result.get("failures") or [])
+    if not failures:
+        return
+
+    try:
+        from notify import load_mail_config, send_failure_mail, format_failure_report
+    except Exception as exc:
+        print(f"⚠️  无法加载邮件模块，跳过失败通知: {exc}")
+        return
+
+    mail_config = load_mail_config()
+    if not mail_config:
+        print("⚠️  本次存在失败，但未配置邮件通知（config.json 的 mail 段缺失或未启用）")
+        return
+
+    subject = f"[Folo 归档失败] {today} 共 {len(failures)} 项"
+    body = format_failure_report(today, failures, result.get("step_times") or {})
+    ok, message = send_failure_mail(mail_config, subject, body)
+    if ok:
+        print(f"✉️  失败通知邮件已发送: {', '.join(mail_config.get('to', []))}")
+    else:
+        print(f"✗ 失败通知邮件发送失败: {message}")
 
 
 def main():
@@ -62,7 +88,7 @@ def main():
         print()
         print("用法:")
         print("  python archive.py --start-step 4  # 从第 4 步开始")
-        print("  python archive.py --only-step 5   # 只执行第 5 步")
+        print("  python archive.py --only-step 4   # 只执行第 4 步")
         return
 
     # 确定日期
@@ -99,6 +125,9 @@ def main():
         today,
         log=lambda message: print(message, flush=True),
     )
+
+    notify_failures(today, result)
+
     if result["error"]:
         sys.exit(1)
 

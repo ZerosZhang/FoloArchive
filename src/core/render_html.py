@@ -499,6 +499,25 @@ def _render_header(title, meta, strategy_name):
     )
 
 
+def _read_html_text(path, attempts=3, delay=0.5):
+    """读取原始 HTML 文本
+
+    Windows 下刚写完的文件可能被杀毒软件/同步盘短暂占用，表现为
+    PermissionError（Errno 13）。这里重试几次，避免个别文件导致整批失败。
+    """
+    import time
+
+    last_error = None
+    for attempt in range(attempts):
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as exc:
+            last_error = exc
+            if attempt < attempts - 1:
+                time.sleep(delay)
+    raise last_error
+
+
 def convert_file(html_path, output_path=None, download_img=True):
     """渲染单个原始 HTML。
 
@@ -509,7 +528,7 @@ def convert_file(html_path, output_path=None, download_img=True):
     if not html_path.exists():
         return None, "", False, "", ""
 
-    html_text = html_path.read_text(encoding="utf-8")
+    html_text = _read_html_text(html_path)
     title = extract_title(html_text)
     html_url = extract_html_url(html_text)
 
@@ -626,9 +645,14 @@ def scan_and_convert(day_folder=None):
         print(f"[{i:>{total_width}}/{len(html_files)}] {name}{pad}  ", end="", flush=True)
 
         out_path = output_dir / f"{html_path.stem}.html"
-        out_path, source, success, page, base_url = convert_file(
-            html_path, out_path, download_img=False
-        )
+        try:
+            out_path, source, success, page, base_url = convert_file(
+                html_path, out_path, download_img=False
+            )
+        except Exception as exc:  # 单个文件失败不应中断整批
+            print(f"✗ 渲染异常 ({type(exc).__name__})", flush=True)
+            results["failed"].append((html_path.name, "读取失败"))
+            continue
 
         if success:
             print(f"✓ [{source}]", flush=True)

@@ -67,7 +67,8 @@ run_archive(selected_steps, today, log, on_progress=None, should_stop=None) -> d
 - 步骤 2 以 **`overwrite=True`** 调用 `download_articles`，同一天重跑时重新下载并覆盖旧的原始 HTML（`save_webpages.py` 自身的 CLI 默认仍为 `overwrite=False`）
 - 步骤 3 原始 HTML 与成品 HTML 分目录存放：原始在 `temp_data/raw/<日期>/`，成品在 `result/<日期>/`，避免同名相互覆盖；`scan_and_convert` 对 raw 目录下所有 `*.html` 逐个重渲染，**本来就是覆盖写**
 - 步骤 4 每次都重新调用 API 生成摘要并覆盖旧摘要区块，**不再因「已有摘要」而跳过**
-- 步骤 4 生成 `result/<日期>/YYYY年MM月DD日.html` 索引页，按来源分组（篇数降序 + 中文序号），每篇链接到成品 HTML 并附一句摘要；文章链接带 `target="_blank"`，**在新标签页打开**，避免从总览跳转时覆盖当前页面
+- 步骤 4 生成 `result/<日期>/YYYY年MM月DD日.html` 索引页，按来源分组（篇数降序 + 中文序号），每篇链接到成品 HTML 并附摘要；文章链接带 `target="_blank"`，**在新标签页打开**，避免从总览跳转时覆盖当前页面
+- 索引页摘要块由 `_summary_digest()` 生成：**保留 AI 摘要原有的分行**（概括 / 背景 / 观点，或合集的「重点新闻：」条目），每行一个 `<br>`、跳过空行，不再把换行压成空格拼成一整段
 - 失败聚合：步骤 1（认证/抓取）、步骤 2（逐条下载失败）、步骤 3（渲染失败/未识别来源）、步骤 4（逐条摘要失败）以及整体 `error` 全部追加进 `failures`
 - 输出目录 `result/YYYY年MM月DD日/`，路径来自 `utils.OUTPUT_BASE_DIR` / `utils.RAW_DIR`
 

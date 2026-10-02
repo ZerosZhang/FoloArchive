@@ -650,8 +650,9 @@ def scan_and_convert(day_folder=None):
                 html_path, out_path, download_img=False
             )
         except Exception as exc:  # 单个文件失败不应中断整批
-            print(f"✗ 渲染异常 ({type(exc).__name__})", flush=True)
-            results["failed"].append((html_path.name, "读取失败"))
+            detail = f"{type(exc).__name__}: {exc}"[:160]
+            print(f"✗ 渲染异常 ({detail})", flush=True)
+            results["failed"].append((html_path.name, f"读取失败 {detail}"))
             continue
 
         if success:

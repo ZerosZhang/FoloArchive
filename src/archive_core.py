@@ -78,6 +78,12 @@ def _download_step(article_list, today, log, on_progress=None):
     return success, fail, skipped, failed, step_time
 
 
+def _summary_digest(summary):
+    """索引页摘要块：保留 AI 摘要原有的分行（概括 / 背景 / 观点），跳过空行本身"""
+    lines = (line.strip() for line in (summary or "").splitlines())
+    return "<br>".join(html_escape(line) for line in lines if line)
+
+
 def _write_index_page(today, index_path, results):
     """生成当日 HTML 汇总索引页：按来源分组，链接到各篇文章并附摘要"""
     from render_html import render_document
@@ -111,7 +117,7 @@ def _write_index_page(today, index_path, results):
         for r in articles:
             href = quote(r["filename"])
             display = html_escape(r["display_title"])
-            digest = html_escape(r["summary"]).replace("\n", " ")
+            digest = _summary_digest(r["summary"])
             parts.append(
                 f'<li class="index-item"><a href="./{href}" target="_blank" rel="noopener noreferrer">{display}</a>'
                 f'<div class="digest">{digest}</div></li>'
@@ -317,8 +323,8 @@ def run_archive(selected_steps, today, log, on_progress=None, should_stop=None):
         step_times[3] = time.time() - step_start
         log(f"  ⏱ 耗时: {format_duration(step_times[3])}")
 
-        for name, source in conversion.get("failed", []):
-            failures.append(f"步骤 3 渲染失败: [{source}] {name}")
+        for name, reason in conversion.get("failed", []):
+            failures.append(f"步骤 3 渲染失败: [{reason}] {name}")
         for name, _ in conversion.get("unknown", []):
             failures.append(f"步骤 3 未识别来源: {name}")
     else:
@@ -371,8 +377,8 @@ def run_archive(selected_steps, today, log, on_progress=None, should_stop=None):
         if convert_failed or convert_unknown:
             log(f"渲染失败: {len(convert_failed)} 篇，未知来源: {len(convert_unknown)} 篇")
             log("  失败原因：")
-            for name, source in convert_failed:
-                log(f"    [{source}] {name} - 已识别来源但渲染失败")
+            for name, reason in convert_failed:
+                log(f"    [{reason}] {name} - 已匹配来源但渲染失败")
             for name, _ in convert_unknown:
                 log(f"    [未知来源] {name} - 未添加解析策略")
     if summary_result:

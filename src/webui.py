@@ -3,8 +3,8 @@
 Folo 文章归档 —— 本地网页版界面（纯标准库实现）
 
 用途：项目唯一的图形界面。用浏览器访问一个本地 HTTP 服务完成归档工作：
-手动归档、实时日志、进度条、耗时统计、失败邮件、归档热力图、常驻调度器
-（scheduler.py）的状态查看。
+手动归档、实时日志、进度条、耗时统计、失败邮件、归档热力图，以及每日定时
+归档（内建调度线程，与独立调度器 scheduler.py 通过命名互斥量互斥）。
 
 设计要点：
 - 只依赖标准库：http.server / socketserver / json / threading / ctypes /
@@ -19,6 +19,7 @@ Folo 文章归档 —— 本地网页版界面（纯标准库实现）
 运行：
     python src/webui.py
     python src/webui.py --host 0.0.0.0 --port 9000 --no-browser
+    python src/webui.py --no-schedule          # 关闭内建定时（改由后台运行.bat 独立调度）
 """
 
 import argparse
@@ -43,7 +44,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(SCRIPT_DIR / "core"))
 
 # Windows 终端编码修复（必须在导入其他脚本之前执行）
-from utils import fix_encoding, CONFIG_PATH, OUTPUT_BASE_DIR
+from utils import fix_encoding, CONFIG_PATH, OUTPUT_BASE_DIR, TEMP_DIR
 
 fix_encoding()
 
@@ -360,24 +361,47 @@ def get_heatmap(force=False):
 
 
 # =============================================================================
-# 常驻调度器状态（scheduler.py，命名互斥量检测）
+# 每日定时（内建调度，与独立调度器 scheduler.py 通过命名互斥量互斥）
 # =============================================================================
 _SCHED_LOCK = threading.Lock()
 _SCHED_CACHE = {"at": 0.0, "data": None}
 
-# scheduler.py 里的 LOG_PATH / MUTEX_NAME，保持一致
-SCHEDULER_LOG_PATH = OUTPUT_BASE_DIR / "scheduler.log"
+# 与 scheduler.py 的 MUTEX_NAME 一致，两者靠它互斥
 SCHEDULER_MUTEX = "FoloArchiveScheduler"
-SCHEDULER_LOG_TAIL = 15
+SCHEDULE_CHECK_INTERVAL = 20               # 秒，调度线程轮询间隔
 _SCHEDULE_TIME_RE = re.compile(r"^\d{1,2}:\d{2}$")
+
+# 调度归属：None（未初始化）/ "webui"（本进程）/ "external"（外部调度器）/ "disabled"
+_SCHED_OWNER = None
+_SCHED_LAST_RUN_DATE = None                # 进程内已触发的日期（与 scheduler.py 的兜底同理）
+_SCHED_MUTEX_HANDLE = None                 # 本进程持有的互斥量句柄，存活期间不关闭
+
+
+def _acquire_schedule_mutex():
+    """尝试获取调度互斥量：本进程拿到返回句柄，已被占用返回 None
+
+    句柄需由调用方长期持有（不要 CloseHandle），外部 scheduler.py 启动时才会
+    检测到「已有实例」而退出。非 Windows 或调用失败时返回 True 占位，
+    退化为「不互斥」，不阻塞启动。
+    """
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.CreateMutexW(None, False, SCHEDULER_MUTEX)
+        if not handle:
+            return True
+        if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+            return None
+        return handle
+    except Exception:  # noqa: BLE001 - 非 Windows 或调用失败时不阻塞
+        return True
 
 
 def _scheduler_running():
-    """用命名互斥量检测 scheduler.py 是否已在运行
+    """探测互斥量是否已被外部 scheduler.py 持有
 
-    CreateMutexW 若发现互斥量已存在，会把 GetLastError 置为 183
-    （ERROR_ALREADY_EXISTS），据此判断已有常驻实例。检测完立即 CloseHandle，
-    避免持有句柄挡住真正的调度器启动。非 Windows 或调用失败时安全返回 False。
+    本进程若已持有该互斥量，这里同样会返回 True，所以调用方要先判断
+    _SCHED_OWNER == "webui"。CreateMutexW 只做探测，用完立即 CloseHandle，
+    不持有句柄。非 Windows 或调用失败时安全返回 False。
     """
     try:
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -416,17 +440,99 @@ def _scheduler_config():
     return enabled, at
 
 
-def _schedule_log_tail(max_lines=SCHEDULER_LOG_TAIL):
-    """读 result/scheduler.log 的最后若干行；文件不存在或读取失败返回空列表"""
+def _target_today(at):
+    """今天的设定时刻（datetime）；解析失败时回退到当天 23:59（即当天不再触发）"""
     try:
-        lines = SCHEDULER_LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return []
-    return lines[-max_lines:]
+        hour, minute = (int(x) for x in at.split(":"))
+        return datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0)
+    except (ValueError, AttributeError):
+        return datetime.now().replace(hour=23, minute=59, second=0, microsecond=0)
+
+
+def _list_json_path(today):
+    """当天文章列表 JSON 的路径（步骤 1 的产物，与 scheduler.py 的判据一致）"""
+    return TEMP_DIR / f"「{today}」.json"
+
+
+def _schedule_worker():
+    """内建调度线程：每 20 秒检查一次，到点且当天未跑则触发一次完整归档
+
+    触发直接复用 start_run()（不另起子进程、不重复实现流程）；只有它返回 ok
+    才记下当天已跑，返回失败（如已有任务在跑）保持未记，下个周期自然重试。
+    任何异常都只记日志，绝不让线程退出。
+    """
+    global _SCHED_LAST_RUN_DATE
+    while True:
+        try:
+            enabled, at = _scheduler_config()
+            today = datetime.now().strftime("%Y年%m月%d日")
+            if enabled and _SCHED_LAST_RUN_DATE != today and datetime.now() >= _target_today(at):
+                if _list_json_path(today).exists():
+                    _SCHED_LAST_RUN_DATE = today
+                    LOG.append(f"[WebUI] 定时：当天已归档过（存在 {_list_json_path(today).name}），跳过")
+                else:
+                    ok, error = start_run([1, 2, 3, 4], today)
+                    if ok:
+                        _SCHED_LAST_RUN_DATE = today
+                        LOG.append(f"[WebUI] 定时（{at}）触发：开始执行当日归档 {today}")
+                    else:
+                        LOG.append(f"[WebUI] 定时触发未启动：{error}")
+        except Exception as exc:  # noqa: BLE001 - 循环内异常不允许终止调度
+            LOG.append(f"[WebUI] 定时循环异常: {type(exc).__name__}: {exc}")
+        time.sleep(SCHEDULE_CHECK_INTERVAL)
+
+
+def start_scheduler():
+    """启动内建定时（默认行为）：取到互斥量则起调度线程，被占用则只记日志
+
+    返回最终的调度归属字符串，便于日志/展示。
+    """
+    global _SCHED_OWNER, _SCHED_MUTEX_HANDLE
+    enabled, at = _scheduler_config()
+    if not enabled:
+        _SCHED_OWNER = "disabled"
+        LOG.append("[WebUI] config.json 的 schedule.enabled=false，内建定时未启用")
+        return _SCHED_OWNER
+
+    handle = _acquire_schedule_mutex()
+    if handle is None:
+        _SCHED_OWNER = "external"
+        LOG.append("[WebUI] 检测到外部调度器（后台运行.bat / scheduler.py），本进程不再重复调度")
+        return _SCHED_OWNER
+
+    _SCHED_MUTEX_HANDLE = handle       # 进程存活期间一直持有，保持与外部调度器互斥
+    _SCHED_OWNER = "webui"
+    LOG.append(f"[WebUI] 内建定时已启用：每天 {at} 自动执行一次完整归档（关闭网页版即停止定时）")
+    threading.Thread(target=_schedule_worker, daemon=True).start()
+    return _SCHED_OWNER
+
+
+def disable_scheduler():
+    """用 --no-schedule 显式关闭内建定时"""
+    global _SCHED_OWNER
+    _SCHED_OWNER = "disabled"
+    LOG.append("[WebUI] 已用 --no-schedule 关闭内建定时调度")
+
+
+def _schedule_owner():
+    """当前调度归属：webui（本进程）/ external（外部调度器）/ disabled"""
+    if _SCHED_OWNER == "webui":
+        return "webui"
+    if _scheduler_running():
+        return "external"
+    return "disabled"
+
+
+_SCHEDULE_NOTES = {
+    "webui": "定时由本网页版进程负责；关闭网页版即停止定时。"
+             "也可改用 后台运行.bat 独立运行（两者互斥，不会重复）。",
+    "external": "已检测到外部调度器（后台运行.bat），本进程不再重复调度。",
+    "disabled": "内建定时已关闭（--no-schedule 或 config.json 里 schedule.enabled=false）。",
+}
 
 
 def get_schedule(force=False):
-    """检测常驻调度器状态，返回展示用 dict"""
+    """返回调度状态：owner / running / enabled / time / note"""
     now = time.time()
     with _SCHED_LOCK:
         cached = _SCHED_CACHE.get("data")
@@ -434,12 +540,13 @@ def get_schedule(force=False):
             return cached
 
     enabled, at = _scheduler_config()
+    owner = _schedule_owner()
     result = {
-        "running": _scheduler_running(),
-        "time": at,
+        "owner": owner,
+        "running": owner in ("webui", "external"),
         "enabled": enabled,
-        "log_tail": _schedule_log_tail(),
-        "note": "定时由常驻调度器负责（后台运行.bat / scheduler.py），不依赖本页面是否打开",
+        "time": at,
+        "note": _SCHEDULE_NOTES.get(owner, _SCHEDULE_NOTES["disabled"]),
     }
 
     with _SCHED_LOCK:
@@ -567,6 +674,8 @@ def parse_args():
     parser.add_argument("--host", default=None, help="监听地址（默认 127.0.0.1，可被 config.json 的 web.host 覆盖默认值）")
     parser.add_argument("--port", type=int, default=None, help="监听端口（默认 8765）")
     parser.add_argument("--no-browser", action="store_true", help="启动后不自动打开浏览器")
+    parser.add_argument("--no-schedule", action="store_true",
+                        help="不启动内建定时调度（默认启动；关闭后可改用 后台运行.bat 独立调度）")
     return parser.parse_args()
 
 
@@ -600,6 +709,12 @@ def main():
     LOG.append(f"Folo 网页版界面已启动：{url}")
     LOG.append("归档请用页面上的按钮；按 Ctrl+C 退出服务")
     LOG.append("=" * 60)
+
+    # 内建定时：默认开启；取不到互斥量说明外部调度器在跑，本进程不重复调度
+    if args.no_schedule:
+        disable_scheduler()
+    else:
+        start_scheduler()
 
     if not args.no_browser:
         try:

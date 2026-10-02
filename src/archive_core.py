@@ -59,8 +59,9 @@ def _download_step(article_list, today, log, on_progress=None):
         if on_progress:
             on_progress(20 + (index / total) * 30, f"步骤 2: 下载网页 {index}/{total}...")
 
+    # 同一天重跑时重新下载并覆盖旧文件
     success, fail, skipped, failed = download_articles(
-        article_list, output_dir, on_progress=on_download_progress
+        article_list, output_dir, on_progress=on_download_progress, overwrite=True
     )
 
     log("")
@@ -235,28 +236,42 @@ def run_archive(selected_steps, today, log, on_progress=None, should_stop=None):
 
     # ========== 步骤 1: 获取未读文章列表（含认证检查）==========
     if should_run(1):
-        log(f"[步骤 1/{total_steps}] 获取未读文章列表...")
         if on_progress:
             on_progress(10, "步骤 1: 获取文章列表...")
 
-        step_start = time.time()
-        today_str, article_list, output_path, fetch_failure = export_articles(skip_auth_check=False)
+        # 当天列表已存在则直接复用，避免重复抓取（抓取会把 Folo 未读标记为已读）
+        json_path = TEMP_DIR / f"「{today}」.json"
+        if json_path.exists():
+            log(f"[步骤 1/{total_steps}] 获取未读文章列表 - ⏭️ 跳过（已存在 「{today}」.json）")
+            log("  提示：如需重新抓取，请先删除该文件，或用 --date 指定其他日期")
+            article_list = _load_article_list(today)
+            if not article_list:
+                log(f"✗ 无法从已存在的列表文件加载文章: {json_path}")
+                failures.append(f"步骤 1 无法加载已存在的列表文件: {json_path}")
+                return snapshot()
+            log(f"📂 从文件加载了 {len(article_list)} 篇文章")
+            log(f"  列表文件: {json_path}")
+            log("")
+        else:
+            log(f"[步骤 1/{total_steps}] 获取未读文章列表...")
+            step_start = time.time()
+            today_str, article_list, output_path, fetch_failure = export_articles(skip_auth_check=False)
 
-        if fetch_failure:
-            failures.append(f"步骤 1 获取文章列表失败: {fetch_failure}")
-
-        if not article_list:
             if fetch_failure:
-                log(f"✗ 获取文章列表失败: {fetch_failure}")
-            else:
-                log("✗ 没有未读文章")
-            return snapshot()
+                failures.append(f"步骤 1 获取文章列表失败: {fetch_failure}")
 
-        step_times[1] = time.time() - step_start
-        log(f"✓ 共 {len(article_list)} 篇文章")
-        log(f"  列表保存: {output_path}")
-        log(f"  ⏱ 耗时: {format_duration(step_times[1])}")
-        log("")
+            if not article_list:
+                if fetch_failure:
+                    log(f"✗ 获取文章列表失败: {fetch_failure}")
+                else:
+                    log("✗ 没有未读文章")
+                return snapshot()
+
+            step_times[1] = time.time() - step_start
+            log(f"✓ 共 {len(article_list)} 篇文章")
+            log(f"  列表保存: {output_path}")
+            log(f"  ⏱ 耗时: {format_duration(step_times[1])}")
+            log("")
     else:
         log(f"[步骤 1/{total_steps}] 获取文章列表 - ⏭️ 跳过")
 

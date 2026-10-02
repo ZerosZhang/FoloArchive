@@ -21,7 +21,7 @@
 ## 行为要点
 
 - 下载失败记录到 `failed_urls`，最后统一打印，不中断流程
-- 默认不覆盖已存在文件，加 `--overwrite` 强制覆盖
+- `download_articles(..., overwrite=False)` 默认不覆盖已存在文件，CLI 加 `--overwrite` 强制覆盖；**归档管线（`archive_core._download_step`）固定以 `overwrite=True` 调用**，以便同一天重跑时重新下载并覆盖旧文件
 - 非法字符自动去除（Windows 文件名兼容、统一中文标点、限制长度）
 - 失败原因回调为干净文本（`下载失败: HTTP 404: Not Found`），无 HTML 注释与换行
 - `_NO_PROXY_SITES` 中的域名（如 `meta.appinn.net`）绕过系统代理直连——部分代理节点与其 TLS 握手会报 `SSL: UNEXPECTED_EOF_WHILE_READING`

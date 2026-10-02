@@ -4,7 +4,8 @@
 功能：
 1. 扫描当天日期文件夹下的所有 .html 文章（排除当天索引页）
 2. 并行调用 AI API 生成摘要
-3. 将摘要注入每篇文章的 <section class="ai-summary" data-folo="summary"> 区块（幂等）
+3. 将摘要注入每篇文章的 <section class="ai-summary" data-folo="summary"> 区块
+   （每次运行都重新生成并覆盖旧摘要，同一天重跑不会跳过）
 """
 
 import html
@@ -102,18 +103,6 @@ def _summary_to_html(summary):
         p = html.escape(p).replace("\n", "<br>")
         parts.append(f"<p>{p}</p>")
     return "\n".join(parts)
-
-
-def _extract_existing_summary(content):
-    """从文章 HTML 的摘要区块中取出已有的纯文本摘要"""
-    m = _SUMMARY_SECTION_RE.search(content)
-    if not m:
-        return ""
-    inner = m.group(2)
-    inner = re.sub(r"<br\s*/?>", "\n", inner, flags=re.IGNORECASE)
-    inner = re.sub(r"</p>", "\n", inner, flags=re.IGNORECASE)
-    inner = re.sub(r"<[^>]+>", "", inner)
-    return html.unescape(inner).strip()
 
 
 def summarize_article(client, model, content, filename, max_retries=3):
@@ -248,19 +237,8 @@ def process_article(client, model, html_file, date):
     if not content.strip():
         return {"success": False, "filename": filename, "source": source, "error": "文件内容为空"}
 
-    # 已有摘要则跳过，避免重跑叠加与重复调用 API
-    existing_summary = _extract_existing_summary(content)
-    if existing_summary:
-        return {
-            "success": True,
-            "filename": filename,
-            "display_title": display_title,
-            "source": source,
-            "summary": existing_summary,
-            "skipped": True,
-        }
-
-    # 调用 API 生成摘要（输入为纯文本，避免样式/标签干扰）
+    # 每次都重新调用 API 生成摘要（输入为纯文本，避免样式/标签干扰），写入时覆盖旧区块
+    # 即同一天重跑不会因「已有摘要」而跳过
     result = summarize_article(client, model, _extract_text_for_llm(content), filename)
 
     if isinstance(result, tuple):
@@ -344,11 +322,8 @@ def main():
 
             if result["success"]:
                 processed += 1
-                if result.get("skipped"):
-                    print(f"  ○ [{processed}/{total_count}] {result['filename']} (已有摘要，跳过)", flush=True)
-                else:
-                    print(f"  ✓ [{processed}/{total_count}] {result['filename']}", flush=True)
-                    print(f"    {result['summary'][:50]}...", flush=True)
+                print(f"  ✓ [{processed}/{total_count}] {result['filename']}", flush=True)
+                print(f"    {result['summary'][:50]}...", flush=True)
             else:
                 failed += 1
                 print(f"  ✗ {result['filename']}: {result['error']}", flush=True)

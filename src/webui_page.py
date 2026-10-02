@@ -74,10 +74,6 @@ input[type=text]{font-family:inherit;font-size:13px;padding:5px 8px;border:1px s
 .sched td.k{color:#57606a;white-space:nowrap}
 .sched .st-run{color:#1f883d;font-weight:bold}
 .sched .st-stop{color:#57606a;font-weight:bold}
-.sched-log{margin-top:10px;max-height:180px;overflow:auto;background:#0d1117;color:#c9d1d9;
-           padding:8px 10px;border-radius:6px;font-family:Consolas,"Courier New",monospace;
-           font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-all}
-.sched-log .empty{color:#8b949e}
 </style>
 </head>
 <body>
@@ -124,10 +120,8 @@ input[type=text]{font-family:inherit;font-size:13px;padding:5px 8px;border:1px s
 
   <section class="card">
     <h2>常驻定时</h2>
-    <p class="note">定时由常驻调度器负责（<code>后台运行.bat</code> 启动 / <code>后台运行.bat stop</code> 停止），
-       <b>不依赖本页面是否打开</b>。此面板只展示调度器状态与最近日志。</p>
+    <p class="note" id="sched-note">加载中…</p>
     <div class="sched" id="sched-status">加载中…</div>
-    <div class="sched-log" id="sched-log"></div>
   </section>
 
   <section class="card">
@@ -278,12 +272,19 @@ input[type=text]{font-family:inherit;font-size:13px;padding:5px 8px;border:1px s
   }
 
   /* ---------------- 常驻定时面板 ---------------- */
+  var SCHED_NOTES = {
+    webui: "定时由本网页版进程负责；关闭网页版即停止定时。也可改用 后台运行.bat 独立运行（两者互斥，不会重复）。",
+    external: "已检测到外部调度器（后台运行.bat），本进程不再重复调度。",
+    disabled: "内建定时已关闭（--no-schedule 或 config.json 里 schedule.enabled=false）。"
+  };
   function renderSchedule(s){
     s = s || {};
-    var running = !!s.running;
-    var statusHtml = running
-      ? '<span class="st-run">● 运行中</span>'
-      : '<span class="st-stop">● 未运行</span>';
+    var owner = s.owner || (s.running ? "external" : "disabled");
+    var label, cls;
+    if(owner === "webui"){ label = "由本进程负责（运行中）"; cls = "st-run"; }
+    else if(owner === "external"){ label = "由外部调度器负责"; cls = "st-run"; }
+    else { label = "未启用"; cls = "st-stop"; }
+    var statusHtml = '<span class="' + cls + '">● ' + label + '</span>';
     var timeHtml = escapeHtml(s.time || "08:00") +
       (s.enabled === false ? '（已在 config.json 中关闭）' : '');
     var rows = [ ["状态", statusHtml], ["设定时刻", timeHtml] ];
@@ -293,14 +294,7 @@ input[type=text]{font-family:inherit;font-size:13px;padding:5px 8px;border:1px s
     });
     html += "</table>";
     el("sched-status").innerHTML = html;
-
-    var lines = s.log_tail || [];
-    var logBox = el("sched-log");
-    if(!lines.length){
-      logBox.innerHTML = '<span class="empty">暂无日志</span>';
-    } else {
-      logBox.textContent = lines.join("\n");
-    }
+    el("sched-note").textContent = SCHED_NOTES[owner] || SCHED_NOTES.disabled;
   }
   function refreshSchedule(force){
     fetch("/api/schedule" + (force ? "?refresh=1" : ""))

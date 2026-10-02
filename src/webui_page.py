@@ -59,13 +59,15 @@ input[type=text]{font-family:inherit;font-size:13px;padding:5px 8px;border:1px s
 .heat-grid{display:grid;grid-template-rows:repeat(7,12px);grid-auto-flow:column;
            grid-auto-columns:12px;gap:2px}
 .cell{width:12px;height:12px;border-radius:2px;background:#ebedf0}
-.cell.l0{background:#ebedf0}
-.cell.l1{background:#9be9a8}
-.cell.l2{background:#40c463}
-.cell.l3{background:#30a14e}
-.cell.l4{background:#216e39}
-.heat-legend{display:flex;align-items:center;gap:3px;font-size:10px;color:#57606a;
-             margin-top:8px;justify-content:flex-end}
+.cell.none{background:#ebedf0}
+.cell.unread{background:#2ea043}
+.cell.read{background:#0969da}
+.cell.clickable{cursor:pointer}
+.cell.clickable:hover{outline:1px solid #57606a;outline-offset:1px}
+.heat-legend{display:flex;align-items:center;gap:4px;font-size:10px;color:#57606a;
+             margin-top:8px;justify-content:flex-end;flex-wrap:wrap}
+.heat-legend .gap{width:8px}
+.heat-hint{font-size:10px;color:#57606a;text-align:right;margin-top:4px}
 /* ---------- 定时面板 ---------- */
 .note{font-size:12px;color:#57606a;background:#fff8c5;border:1px solid #d4a72c55;
       border-radius:6px;padding:7px 10px;margin:0 0 10px}
@@ -96,10 +98,13 @@ input[type=text]{font-family:inherit;font-size:13px;padding:5px 8px;border:1px s
       </div>
     </div>
     <div class="heat-legend">
-      <span>少</span>
-      <i class="cell l0"></i><i class="cell l1"></i><i class="cell l2"></i><i class="cell l3"></i><i class="cell l4"></i>
-      <span>多</span>
+      <i class="cell none"></i><span>无归档</span>
+      <span class="gap"></span>
+      <i class="cell unread"></i><span>未读</span>
+      <span class="gap"></span>
+      <i class="cell read"></i><span>已读</span>
     </div>
+    <div class="heat-hint">单击格子：在新标签页打开当天总览并标记为已读；Shift/Alt + 单击：只切换已读状态。</div>
   </section>
 
   <section class="card">
@@ -141,7 +146,6 @@ input[type=text]{font-family:inherit;font-size:13px;padding:5px 8px;border:1px s
   function el(id){ return document.getElementById(id); }
   function pad(n){ return (n < 10 ? "0" : "") + n; }
   function dateKey(d){ return d.getFullYear() + "年" + pad(d.getMonth()+1) + "月" + pad(d.getDate()) + "日"; }
-  function level(c){ if(!c || c <= 0) return 0; if(c <= 3) return 1; if(c <= 7) return 2; if(c <= 15) return 3; return 4; }
   function escapeHtml(t){
     return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
@@ -169,15 +173,54 @@ input[type=text]{font-family:inherit;font-size:13px;padding:5px 8px;border:1px s
     if(nearBottom){ logEl.scrollTop = logEl.scrollHeight; }
   }
 
-  /* ---------------- 热力图 ---------------- */
+  /* ---------------- 热力图（阅读状态日历） ---------------- */
   var WEEKDAY_LABELS = ["周一", "", "周三", "", "周五", "", ""];
   function initWeekdays(){
     var html = "";
     for(var i = 0; i < 7; i++){ html += "<div>" + WEEKDAY_LABELS[i] + "</div>"; }
     el("heat-weekdays").innerHTML = html;
   }
-  function renderHeatmap(counts, total, recent30){
-    el("heat-overview").textContent = "共归档 " + total + " 篇 · 最近 30 天 " + recent30 + " 篇";
+
+  // 把某天标记为已读/未读，成功后立即刷新热力图让格子变色
+  function postRead(key, read){
+    return fetch("/api/read", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ date: key, read: read })
+    }).then(function(r){ return r.json(); }).then(function(d){
+      if(!d || !d.ok){ addLog("[WebUI] 已读状态更新失败: " + ((d && d.error) || "未知错误")); }
+      refreshHeatmap();
+    }).catch(function(e){ addLog("[WebUI] 已读状态请求失败: " + e); });
+  }
+
+  function makeCell(key, day, info, today){
+    var count = info ? (Number(info.count) || 0) : 0;
+    var read = info ? !!info.read : false;
+    var cell = document.createElement("div");
+    cell.className = "cell " + (count > 0 ? (read ? "read" : "unread") : "none");
+
+    if(count > 0){
+      cell.classList.add("clickable");
+      cell.title = key + " · " + count + " 篇 · " + (read ? "已读" : "未读");
+      cell.addEventListener("click", function(ev){
+        ev.preventDefault();
+        if(ev.shiftKey || ev.altKey){ postRead(key, !read); return; }   // 只切换已读状态
+        postRead(key, true);                                            // 打开即视为已读
+        window.open("/archive/" + encodeURIComponent(key) + "/" + encodeURIComponent(key) + ".html",
+                    "_blank", "noopener");
+      });
+    } else {
+      cell.title = key + " · 无归档";
+      cell.addEventListener("click", function(){ cell.title = key + " · 无归档（当天没有归档）"; });
+    }
+
+    if(day > today){ cell.style.visibility = "hidden"; }   // 未来日期不显示
+    return cell;
+  }
+
+  function renderHeatmap(days, total, recent30, readDays){
+    el("heat-overview").textContent =
+      "共归档 " + total + " 篇 · 最近 30 天 " + recent30 + " 篇 · 已读 " + readDays + " 天";
     var grid = el("heat-grid"), months = el("heat-months");
     grid.innerHTML = ""; months.innerHTML = "";
     var today = new Date(); today.setHours(0,0,0,0);
@@ -197,18 +240,14 @@ input[type=text]{font-family:inherit;font-size:13px;padding:5px 8px;border:1px s
       }
       for(var row = 0; row < 7; row++){
         var d = new Date(cm); d.setDate(cm.getDate() + row);
-        var c = counts[dateKey(d)] || 0;
-        var cell = document.createElement("div");
-        cell.className = "cell l" + level(c);
-        cell.title = (d.getMonth() + 1) + "月" + d.getDate() + "日 · " + c + " 篇";
-        if(d > today){ cell.style.visibility = "hidden"; }
-        grid.appendChild(cell);
+        var key = dateKey(d);
+        grid.appendChild(makeCell(key, d, days[key], today));
       }
     }
   }
   function refreshHeatmap(){
     fetch("/api/heatmap").then(function(r){ return r.json(); }).then(function(d){
-      renderHeatmap(d.counts || {}, d.total || 0, d.recent30 || 0);
+      renderHeatmap(d.days || {}, d.total || 0, d.recent30 || 0, d.read_days || 0);
     }).catch(function(){});
   }
 
@@ -273,8 +312,8 @@ input[type=text]{font-family:inherit;font-size:13px;padding:5px 8px;border:1px s
 
   /* ---------------- 常驻定时面板 ---------------- */
   var SCHED_NOTES = {
-    webui: "定时由本网页版进程负责；关闭网页版即停止定时。也可改用 后台运行.bat 独立运行（两者互斥，不会重复）。",
-    external: "已检测到外部调度器（后台运行.bat），本进程不再重复调度。",
+    webui: "定时由本网页版进程负责；关闭网页版即停止定时。也可改用 python src/scheduler.py 独立运行（两者互斥，不会重复）。",
+    external: "已检测到外部调度器（scheduler.py），本进程不再重复调度。",
     disabled: "内建定时已关闭（--no-schedule 或 config.json 里 schedule.enabled=false）。"
   };
   function renderSchedule(s){

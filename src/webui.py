@@ -19,13 +19,14 @@ Folo 文章归档 —— 本地网页版界面（纯标准库实现）
 运行：
     python src/webui.py
     python src/webui.py --host 0.0.0.0 --port 9000 --no-browser
-    python src/webui.py --no-schedule          # 关闭内建定时（改由后台运行.bat 独立调度）
+    python src/webui.py --no-schedule          # 关闭内建定时（改由 python src/scheduler.py 独立调度）
 """
 
 import argparse
 import ctypes
 import io
 import json
+import os
 import re
 import sys
 import threading
@@ -36,7 +37,7 @@ from collections import deque
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 # 脚本所在目录（src/）与功能模块目录（src/core/）
 SCRIPT_DIR = Path(__file__).parent
@@ -241,6 +242,58 @@ def _valid_date(text):
         return False
 
 
+# =============================================================================
+# 已读状态（按天，持久化 result/read_state.json）
+# =============================================================================
+READ_STATE_PATH = OUTPUT_BASE_DIR / "read_state.json"
+_READ_LOCK = threading.Lock()
+
+
+def load_read_state():
+    """读取按天的已读状态，返回 {日期: True}
+
+    文件不存在 / 损坏 / 结构不对时一律视为「全部未读」，绝不抛异常。
+    """
+    try:
+        with open(READ_STATE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {key: True for key, value in data.items() if isinstance(key, str) and value}
+
+
+def _save_read_state(state):
+    """原子写入：先写临时文件再 replace，避免出现半截 JSON"""
+    READ_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = READ_STATE_PATH.with_name(READ_STATE_PATH.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, READ_STATE_PATH)
+
+
+def set_read_state(date_key, read):
+    """把某天标记为已读（read=True）或未读（read=False），返回 (ok, error)"""
+    if not _valid_date(date_key):
+        return False, "日期格式无效，应为 YYYY年MM月DD日"
+    with _READ_LOCK:
+        state = load_read_state()
+        if read:
+            state[date_key] = True
+        else:
+            state.pop(date_key, None)
+        try:
+            _save_read_state(state)
+        except OSError as exc:
+            return False, f"写入已读状态失败: {exc}"
+    # 已读状态变了，热力图缓存立即失效，下一次拉取就能看到新状态
+    with _HEAT_LOCK:
+        _HEAT_CACHE["data"] = None
+        _HEAT_CACHE["at"] = 0.0
+    return True, None
+
+
 def _normalize_steps(raw):
     valid = {num for num, _, _ in STEPS}
     out = []
@@ -348,16 +401,86 @@ def get_heatmap(force=False):
     today = date.today()
     cutoff = today - timedelta(days=29)
     recent30 = 0
+    days = {}
+    read_state = load_read_state()
     for key, value in counts.items():
         day = _parse_date_key(key)
         if day is not None and cutoff <= day <= today:
             recent30 += value
+        days[key] = {"count": value, "read": key in read_state}
 
-    data = {"counts": counts, "total": sum(counts.values()), "recent30": recent30}
+    read_days = sum(1 for key in counts if key in read_state)
+    data = {
+        "days": days,
+        "total": sum(counts.values()),
+        "recent30": recent30,
+        "read_days": read_days,
+    }
     with _HEAT_LOCK:
         _HEAT_CACHE["data"] = data
         _HEAT_CACHE["at"] = time.time()
     return data
+
+
+# =============================================================================
+# 归档产物静态托管（GET /archive/<日期>/<相对路径>）
+# =============================================================================
+# 归档产物位于 result/ 与更早的历史目录 result/归档/，serve 时依次尝试
+_ARCHIVE_ROOTS = (OUTPUT_BASE_DIR, OUTPUT_BASE_DIR / "归档")
+
+_CONTENT_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".htm": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".mjs": "application/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".md": "text/plain; charset=utf-8",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+}
+
+
+def _content_type_for(suffix):
+    return _CONTENT_TYPES.get(suffix.lower(), "application/octet-stream")
+
+
+def _resolve_archive_file(rel_path):
+    """把 /archive/ 后的相对路径解析成归档根目录内的真实文件，越界返回 None
+
+    防路径穿越：拒绝 NUL、绝对路径（前导 / 或盘符）、任何 `..` 片段；
+    再对解析后的绝对路径做 resolve()，确认仍位于某个允许的根目录之下
+    （is_relative_to 同时挡住符号链接逃逸）。只接受普通文件，不列目录。
+    """
+    if not isinstance(rel_path, str) or not rel_path or "\x00" in rel_path:
+        return None
+
+    cleaned = rel_path.replace("\\", "/")
+    if cleaned.startswith("/") or re.match(r"^[A-Za-z]:", cleaned):
+        return None
+    parts = [p for p in cleaned.split("/") if p not in ("", ".")]
+    if any(p == ".." for p in parts):
+        return None
+    if not parts:
+        return None
+
+    for root in _ARCHIVE_ROOTS:
+        try:
+            root_resolved = root.resolve()
+            candidate = (root_resolved / Path(*parts)).resolve()
+        except (OSError, ValueError):
+            continue
+        if not candidate.is_relative_to(root_resolved):
+            continue
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 # =============================================================================
@@ -497,7 +620,7 @@ def start_scheduler():
     handle = _acquire_schedule_mutex()
     if handle is None:
         _SCHED_OWNER = "external"
-        LOG.append("[WebUI] 检测到外部调度器（后台运行.bat / scheduler.py），本进程不再重复调度")
+        LOG.append("[WebUI] 检测到外部调度器（scheduler.py），本进程不再重复调度")
         return _SCHED_OWNER
 
     _SCHED_MUTEX_HANDLE = handle       # 进程存活期间一直持有，保持与外部调度器互斥
@@ -525,8 +648,8 @@ def _schedule_owner():
 
 _SCHEDULE_NOTES = {
     "webui": "定时由本网页版进程负责；关闭网页版即停止定时。"
-             "也可改用 后台运行.bat 独立运行（两者互斥，不会重复）。",
-    "external": "已检测到外部调度器（后台运行.bat），本进程不再重复调度。",
+             "也可改用 python src/scheduler.py 独立运行（两者互斥，不会重复）。",
+    "external": "已检测到外部调度器（scheduler.py），本进程不再重复调度。",
     "disabled": "内建定时已关闭（--no-schedule 或 config.json 里 schedule.enabled=false）。",
 }
 
@@ -596,12 +719,31 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError, OSError):
             return {}
 
+    # -------------------------------------------------------- 归档静态文件
+    def _serve_archive(self, raw_path):
+        """GET /archive/<日期>/<相对路径>：只读返回归档产物，越界一律 404"""
+        rel_encoded = raw_path[len("/archive/"):]
+        try:
+            rel_path = unquote(rel_encoded)
+        except Exception:  # noqa: BLE001 - 解码失败按原样处理，后续仍会被拒绝
+            rel_path = rel_encoded
+        target = _resolve_archive_file(rel_path)
+        if target is None:
+            return self._send_json({"ok": False, "error": "未找到归档文件"}, status=404)
+        try:
+            data = target.read_bytes()
+        except OSError:
+            return self._send_json({"ok": False, "error": "读取归档文件失败"}, status=404)
+        return self._send_bytes(data, _content_type_for(target.suffix))
+
     # ---------------------------------------------------------------- GET
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
         if path in ("/", "/index.html"):
             return self._send_bytes(PAGE.encode("utf-8"), "text/html; charset=utf-8")
+        if path.startswith("/archive/"):
+            return self._serve_archive(path)
         if path == "/api/state":
             return self._send_json(state_payload())
         if path == "/api/logs":
@@ -630,6 +772,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json({"ok": ok, "error": error})
         if path == "/api/stop":
             return self._send_json({"ok": request_stop()})
+        if path == "/api/read":
+            read = body.get("read")
+            if not isinstance(read, bool):
+                return self._send_json({"ok": False, "error": "read 字段应为布尔值"})
+            ok, error = set_read_state(body.get("date"), read)
+            return self._send_json({"ok": ok, "error": error})
         return self._send_json({"ok": False, "error": "未知路径"}, status=404)
 
 
@@ -675,7 +823,7 @@ def parse_args():
     parser.add_argument("--port", type=int, default=None, help="监听端口（默认 8765）")
     parser.add_argument("--no-browser", action="store_true", help="启动后不自动打开浏览器")
     parser.add_argument("--no-schedule", action="store_true",
-                        help="不启动内建定时调度（默认启动；关闭后可改用 后台运行.bat 独立调度）")
+                        help="不启动内建定时调度（默认启动；关闭后可改用 python src/scheduler.py 独立调度）")
     return parser.parse_args()
 
 

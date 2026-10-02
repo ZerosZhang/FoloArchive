@@ -31,4 +31,6 @@ PYTHONPATH="src/core;src" .venv/Scripts/python.exe src/heatmap.py <目录>
 
 ## 接入状态
 
-已被网页版界面 `src/webui.py` 接入：`GET /api/heatmap` 合并扫描 `result/` 与 `result/归档/`，返回总数与最近 30 天篇数（带 5 秒缓存），前端用 HTML/CSS 网格绘制热力图。
+已被网页版界面 `src/webui.py` 接入：`GET /api/heatmap` 合并扫描 `result/` 与 `result/归档/`
+得到各日篇数，用于判断「当天有无归档」并生成悬停提示文本；再叠加按天已读状态后，前端用
+HTML/CSS 网格绘成三态「阅读状态日历」（灰=无归档、绿=未读、蓝=已读）并支持点击跳转。

@@ -10,8 +10,12 @@
 - 手动执行：4 个步骤复选框（按 `archive_core.STEPS` 动态生成）、日期输入、开始/停止、
   进度条、当前状态文字、各步骤耗时统计
 - 实时日志：等宽字体、自动滚到底，失败行标红（含 `✗`/`❌`/「失败」）、警告标黄（`⚠️`）
-- 归档进展热力图：HTML/CSS 网格绘制（无 JS 图表库），列=周、行=周一~周日，
-  最近 53 周、5 档绿色系色阶，含星期/月份标签与「少→多」图例，另有一行总篇数概览
+- 阅读状态日历（原热力图）：HTML/CSS 网格绘制（无 JS 图表库），列=周、行=周一~周日，
+  最近 53 周、三态配色（灰=无归档、绿=未读、蓝=已读），含星期/月份标签与三态图例；
+  悬停显示日期与篇数，单击在新标签页打开当天总览并标记为已读，Shift/Alt+单击只切换已读状态；
+  另有一行总篇数 / 最近 30 天 / 已读天数的概览
+- 浏览归档产物：`GET /archive/...` 直接托管 `result/` 与 `result/归档/` 下的成品 HTML 与
+  `assets/` 图片，从日历点击即可跳转查看（只读，防路径穿越）
 - 常驻定时：**内建调度线程**（默认开启），每天到设定时刻自动跑一次完整归档；
   也可用 `--no-schedule` 关闭，改由独立调度器 `src/scheduler.py` 负责（两者互斥）
 - 失败邮件：运行结束后 `failures` 非空时按 `config.json` 的 `mail` 段发信
@@ -33,7 +37,7 @@
 # 指定地址/端口、不自动开浏览器
 .venv/Scripts/python.exe src/webui.py --host 0.0.0.0 --port 9000 --no-browser
 
-# 关闭内建定时（改由 后台运行.bat / scheduler.py 独立调度）
+# 关闭内建定时（改由 python src/scheduler.py 独立调度）
 .venv/Scripts/python.exe src/webui.py --no-schedule
 ```
 
@@ -55,10 +59,12 @@
 | GET | `/` | 单页界面 |
 | GET | `/api/state` | `{running, progress, progress_text, steps, step_times, last_log_index, next_log_index, today, schedule}` |
 | GET | `/api/logs?since=N` | `{lines:[...], next:N}`，增量拉取（`N` 为上次返回的 `next`） |
-| GET | `/api/heatmap` | `{counts:{日期:篇数}, total, recent30}` |
+| GET | `/api/heatmap` | `{days:{日期:{"count":篇数,"read":布尔}}, total, recent30, read_days}` |
 | GET | `/api/schedule` | 定时状态 `{owner, running, enabled, time, note}`；`?refresh=1` 强制绕过缓存 |
+| GET | `/archive/<日期>/<相对路径>` | 托管归档产物（HTML 与 `assets/` 图片），越界 404 |
 | POST | `/api/run` | body `{"steps":[1,2,3,4], "date":"YYYY年MM月DD日"}` → `{ok, error}` |
 | POST | `/api/stop` | 请求停止当前运行 → `{ok}` |
+| POST | `/api/read` | body `{"date":"YYYY年MM月DD日", "read":true|false}` → `{ok, error}` |
 
 前端约每 1 秒轮询 `/api/state` 与 `/api/logs?since=N`；热力图按需刷新，常驻定时状态约每 30 秒刷新。
 
@@ -89,14 +95,39 @@
 `format_failure_report` + `send_failure_mail` 并写日志，未配置则只记一行提示，
 全程 try/except，绝不抛异常。
 
-### 热力图
+### 阅读状态日历（原热力图）与已读状态
 
 数据来自 `heatmap.scan_daily_counts`（纯标准库，见 [doc/heatmap.md](heatmap.md)），
-扫描 `OUTPUT_BASE_DIR` 与 `OUTPUT_BASE_DIR/"归档"` 后按日期相加，得到总数与
-最近 30 天篇数，带 5 秒缓存。
+扫描 `OUTPUT_BASE_DIR` 与 `OUTPUT_BASE_DIR/"归档"` 后按日期相加；再与按天的已读状态
+合并，返回 `{days:{日期:{"count":篇数,"read":布尔}}, total, recent30, read_days}`，
+带 5 秒缓存（调用 `POST /api/read` 会立即让缓存失效）。
 
-前端把 `{日期:篇数}` 在 JS 里按 53 周 × 7 天渲染成 CSS Grid，色阶阈值
-0 / 1–3 / 4–7 / 8–15 / 16+。
+前端把 `days` 在 JS 里按 53 周 × 7 天渲染成 CSS Grid，按三态上色：
+无归档（`count==0`）= 浅灰 `#ebedf0`，有归档且未读 = 绿 `#2ea043`，
+有归档且已读 = 蓝 `#0969da`。单元格 `title` 提示 `日期 · 篇数 · 状态`（无归档提示
+「无归档」，未来日期不显示）。单击有归档的格子 → `window.open` 打开
+`/archive/<日期>/<日期>.html` 总览页，同时 `POST /api/read {read:true}`；Shift/Alt+
+单击只切换已读状态、不跳转。无归档的格子不可跳转。
+
+已读状态按天粒度，持久化到 `result/read_state.json`（`READ_STATE_PATH`），结构为
+`{"YYYY年MM月DD日": true, ...}`，只记录「已读」的天（未读的天不出现在文件里）。
+
+- `load_read_state()`：文件不存在 / 损坏 / 结构不对一律返回 `{}`（视为全部未读），不报错。
+- `set_read_state(date_key, read)`：校验日期格式后在 `_READ_LOCK` 内读写；写入用
+  `_save_read_state()` **原子落盘**（先写 `read_state.json.tmp` 再 `os.replace`），
+  避免半截 JSON；成功后清空热力图缓存。
+- `POST /api/read` body `{"date","read"}` → `{ok, error}`；日期非法或 `read` 非布尔值都
+  返回 `{ok:false, error}`。
+
+### 归档产物静态托管（GET /archive/...）
+
+从日历点击跳转的前提。`_resolve_archive_file(rel_path)` 依次在 `OUTPUT_BASE_DIR` 与
+`OUTPUT_BASE_DIR/"归档"` 两个根下查找文件，只接受普通文件（不列目录）。
+
+**防路径穿越**：URL 解码后拒绝 NUL、前导 `/`、盘符（`C:`）与任何 `..` 片段；再对
+`(root.resolve() / rel).resolve()` 做 `is_relative_to(root.resolve())` 校验，越界一律返回
+404（`is_relative_to` 同时挡住符号链接逃逸）。按扩展名设置 `Content-Type`（HTML/CSS/JS/
+图片/JSON/TXT 等，未知回退 `application/octet-stream`），响应带 `Cache-Control: no-store`。
 
 ### 内建定时调度
 
@@ -138,7 +169,7 @@
 ## 取舍
 
 - 内建定时默认开启，定时由本进程负责，**关闭网页版即停止定时**；不想要这个行为就加
-  `--no-schedule`，改用 `后台运行.bat` 独立调度（两者互斥）。
+  `--no-schedule`，改用 `python src/scheduler.py` 独立调度（两者互斥）。
 - 停止是协作式的，在当前步骤边界生效，不会中断正在进行的下载/摘要。
 - 服务进程退出会结束正在运行的归档线程（daemon 线程）。
 - 日志缓冲区上限 2000 行，超出后最早的行从页面/接口消失（终端镜像不受影响）。

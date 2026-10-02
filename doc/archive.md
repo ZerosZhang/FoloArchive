@@ -57,16 +57,18 @@
 
 ## 服务器定时运行（无界面）
 
-Windows Server 直接用 `定时归档.bat`：
+在无界面的服务器上直接运行 CLI：
 
-```bat
-定时归档.bat                 :: 立即执行一次
-定时归档.bat install         :: 注册每天 08:00 的计划任务
-定时归档.bat install 09:30   :: 指定时间
-定时归档.bat status          :: 查看任务状态
-定时归档.bat remove          :: 删除任务
+```bash
+# 立即执行一次完整归档
+.venv/Scripts/python.exe src/archive.py
 ```
 
-- 日志写入 `result\archive.log`（超过约 2MB 自动轮转为 `archive.log.old`）
-- 计划任务以「创建该任务时的当前账户」运行，因此能读到该用户的 `~/.folo/config.json` 登录态
+若需要真正无人值守、且不依赖网页版内建定时，可在「任务计划程序」里手动新建任务：
+程序填 `.venv\Scripts\python.exe`、参数填 `src\archive.py`、起始位置填项目目录，
+触发器设为每天固定时刻。
+
+- 日志默认输出到 stdout，**不会**自动写入 `result\archive.log`；需要留存日志请在任务计划程序里
+  自行重定向（例如 `cmd /c ".venv\Scripts\python.exe src\archive.py >> result\archive.log 2>&1"`）
+- 计划任务以「运行该任务时的账户」启动，因此能读到该用户的 `~/.folo/config.json` 登录态
 - 服务器上**只需** `.venv\Scripts\pip install openai`，CLI 不需要任何界面库

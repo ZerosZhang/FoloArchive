@@ -46,14 +46,14 @@
 - 步骤 2 无法加载列表时以退出码 1 结束
 - **同一天重跑**（再次整轮执行）：复用列表 → 重下载并覆盖原始 HTML → 重渲染 → 重新生成摘要并覆盖（详见 `doc/archive_core.md`）
 - 日志通过回调输出到 stdout（网页版界面 `src/webui.py` 复用同一核心）
-- **失败邮件**：运行结束后若 `run_archive()` 返回的 `failures` 非空，调用 `core/notify.py` 发送通知邮件；未配置 `config.json` 的 `mail` 段时只打印一行提示，**不影响退出码**
+- **失败邮件**：运行结束后若 `run_archive()` 返回的 `failures` 非空，调用 `core/notify.py` 发送通知邮件；未配置 `config.json` 的 `mail` 段时只打印一行提示，**不影响退出码**。`failures` **只包含系统性/流程级失败**（步骤 1 抓取或列表加载失败、流程 error、索引页写入失败）；下载/渲染/摘要的逐条内容失败只在日志与当日索引页内标注，**不再触发邮件**
 
 ## 关键实现
 
 - `main()` 解析参数 → 计算步骤范围 → 调用 `archive_core.run_archive()`
 - 步骤范围由 `len(STEPS)` 计算，步骤增删后范围自动跟随
 - 日志回调：`lambda message: print(message, flush=True)`
-- `notify_failures()`：从返回值取 `failures`，为空直接返回；否则读 `config.json` 的 `mail` 段发信（复用 `core/notify.py`）
+- `notify_failures()`：从返回值取 `failures`，为空直接返回；否则读 `config.json` 的 `mail` 段发信（复用 `core/notify.py`）。内容级失败（下载/渲染/摘要）已不进 `failures`，失败信息在当日索引页 `YYYY年MM月DD日.html` 内就地标注
 
 ## 服务器定时运行（无界面）
 

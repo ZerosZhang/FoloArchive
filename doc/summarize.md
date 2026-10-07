@@ -29,7 +29,7 @@
 - 调用 API 前先把 HTML 转成纯文本（剥离脚本、样式与标签），避免样式干扰
 - 摘要提示词：判断合集/单一主题两种格式，输出大白话概括；不再要求关键词
 - API 失败重试 3 次；摘要截断（`finish_reason=length`）时重试
-- **不生成索引页**：当日索引页 `YYYY年MM月DD日.html` 由 `archive_core._write_index_page` 生成
+- **不生成索引页**：当日索引页 `YYYY年MM月DD日.html` 由 `archive_core._write_index_page` 生成；该页以 `temp_data/「日期」.json` 的条目为准，本模块摘要失败的条目会在页内标注（`digest-warn`）
 
 ## 输出
 

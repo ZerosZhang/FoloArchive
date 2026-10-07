@@ -40,6 +40,9 @@
 
 - 网络超时 `SMTP_TIMEOUT = 30` 秒，避免异常时长时间挂起
 - 失败详情来自 `archive_core.run_archive()` 返回值的 `failures` 字段；步骤编号到中文名的映射见 `STEP_NAMES`
+- `failures` **只包含系统性/流程级失败**（步骤 1 抓取或列表加载失败、流程 `error`、索引页写入失败）。
+  下载 / 渲染 / AI 摘要的逐条内容失败不进 `failures`，改在当日索引页 `YYYY年MM月DD日.html` 内就地标注
+  （`digest-warn` / `digest-failed`），因此**不会**再触发失败邮件
 
 ## 自测
 
@@ -49,4 +52,4 @@
 
 ## 接入状态
 
-已被 `archive.py` 与网页版界面 `webui.py` 接入：每次运行结束后若 `failures` 非空即尝试发信；未配置 `mail` 段时只记一条日志。
+已被 `archive.py` 与网页版界面 `webui.py` 接入：每次运行结束后若 `failures` 非空即尝试发信；未配置 `mail` 段时只记一条日志。由于内容级失败已改在索引页标注，邮件只会在抓取/流程级问题上触发。

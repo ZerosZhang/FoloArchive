@@ -70,6 +70,8 @@ body {
 .index-item { padding: 10px 0; border-bottom: 1px solid #eee; }
 .index-item > a { font-weight: 600; color: #0b6bcb; }
 .index-item .digest { color: #555; font-size: 0.9em; margin-top: 4px; }
+.index-item .digest-failed { color: #b3261e; }
+.index-item .digest-warn { color: #8a6d00; }
 .index-intro { color: #666; font-size: 0.9em; }
 @media (max-width: 600px) {
   body { padding: 0; }

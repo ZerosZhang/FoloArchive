@@ -8,6 +8,7 @@ fetch → download → convert（渲染为干净 HTML）→ summarize（注入�
 """
 
 import json
+import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -19,6 +20,7 @@ from urllib.parse import quote
 sys.path.insert(0, str(Path(__file__).parent / "core"))
 
 from utils import format_duration, TEMP_DIR, RAW_DIR, OUTPUT_BASE_DIR
+from save_webpages import sanitize_filename
 
 # 步骤定义：(编号, 名称, 描述)
 STEPS = [
@@ -84,115 +86,286 @@ def _summary_digest(summary):
     return "<br>".join(html_escape(line) for line in lines if line)
 
 
-def _write_index_page(today, index_path, results):
-    """生成当日 HTML 汇总索引页：按来源分组，链接到各篇文章并附摘要"""
+def _expected_filename(article):
+    """按步骤 2 的命名规则推出该文章在成品目录中的文件名
+
+    与 save_webpages.download_articles 的命名保持一致（含标题为空的边界情形）。
+    """
+    feed = article.get("feed_title", "未知来源")
+    title = article.get("title", "无标题")
+    return f"「{sanitize_filename(feed)}」{sanitize_filename(title)}.html"
+
+
+def _normalize_filename(name):
+    """去掉同名追加的 _1/_2 后缀，便于宽松匹配"""
+    return re.sub(r"_\d+(?=\.html$)", "", name)
+
+
+def _split_archive_name(name):
+    """从成品文件名「来源」标题.html 解析出 (来源, 显示标题)"""
+    stem = name.removesuffix(".html")
+    m = re.match(r"「(.+?)」(.*)", stem)
+    if m:
+        return m.group(1), (m.group(2).strip() or "无标题")
+    return "其他", stem
+
+
+def _index_entry(source, display, filename, url, summary, status, note):
+    """构造一个索引条目（字段含义见 _build_index_entries）"""
+    return {
+        "source": source, "display_title": display, "filename": filename,
+        "url": url, "summary": summary, "status": status, "note": note,
+    }
+
+
+def _build_index_entries(today, article_list, summary_by_file, failure_by_file, missing_notes):
+    """组装索引页条目：以文章列表 JSON 为准，逐条判定本地归档状态
+
+    每条结构: {source, display_title, filename, url, summary, status, note}
+    status:
+      - ok              本地 HTML 与 AI 摘要都齐全
+      - summary-failed  有本地 HTML，但摘要生成失败（页内标注，仍链本地文件）
+      - missing         没有本地 HTML（下载/转换失败），标题直链原文
+    """
+    folder = OUTPUT_BASE_DIR / today
+    index_name = f"{today}.html"
+    existing = {}
+    if folder.exists():
+        for path in sorted(folder.glob("*.html")):
+            if path.name != index_name:
+                existing[path.name] = path
+
+    existing_by_norm = {}
+    for name in existing:
+        existing_by_norm.setdefault(_normalize_filename(name), name)
+
+    entries = []
+    matched = set()
+
+    for article in article_list:
+        expected = _expected_filename(article)
+        name = expected if expected in existing else existing_by_norm.get(_normalize_filename(expected))
+        if name in matched:
+            name = None
+
+        source = article.get("feed_title") or "未知来源"
+        display = article.get("title") or "无标题"
+        url = article.get("url", "")
+
+        if name:
+            matched.add(name)
+            result = summary_by_file.get(name)
+            if result is not None:
+                entries.append(_index_entry(source, display, name, url,
+                                            result.get("summary", ""), "ok", ""))
+            else:
+                error = failure_by_file.get(name) or "未生成摘要"
+                entries.append(_index_entry(source, display, name, url, "",
+                                            "summary-failed", f"⚠️ AI 摘要生成失败：{error}"))
+        else:
+            reason = missing_notes.get(expected) or "本地归档未生成（下载或转换失败）"
+            entries.append(_index_entry(source, display, None, url, "",
+                                        "missing", f"⚠️ {reason}，点击标题跳转原文"))
+
+    # 目录中不在文章列表里的成品文件也一并列出，避免历史数据被漏掉
+    for name in sorted(existing):
+        if name in matched:
+            continue
+        source, display = _split_archive_name(name)
+        result = summary_by_file.get(name)
+        if result is not None:
+            entries.append(_index_entry(source, display, name, "", result.get("summary", ""), "ok", ""))
+        else:
+            error = failure_by_file.get(name) or "未生成摘要"
+            entries.append(_index_entry(source, display, name, "", "",
+                                        "summary-failed", f"⚠️ AI 摘要生成失败：{error}"))
+
+    return entries
+
+
+def _build_entries_from_files(html_files, summary_by_file, failure_by_file):
+    """回退路径：没有文章列表 JSON 时，按成品文件组装索引条目"""
+    entries = []
+    for html_file in html_files:
+        name = html_file.name
+        source, display = _split_archive_name(name)
+        result = summary_by_file.get(name)
+        if result is not None:
+            entries.append(_index_entry(source, display, name, "", result.get("summary", ""), "ok", ""))
+        else:
+            error = failure_by_file.get(name) or "未生成摘要"
+            entries.append(_index_entry(source, display, name, "", "",
+                                        "summary-failed", f"⚠️ AI 摘要生成失败：{error}"))
+    return entries
+
+
+def _write_index_page(today, index_path, entries):
+    """生成当日 HTML 汇总索引页：按来源分组，逐条给出链接与摘要/失败说明"""
     from render_html import render_document
 
     chinese_nums = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十",
                     "十一", "十二", "十三", "十四", "十五", "十六", "十七", "十八", "十九", "二十"]
 
     source_groups = {}
-    for r in results:
-        source_groups.setdefault(r["source"], []).append(r)
+    for entry in entries:
+        source_groups.setdefault(entry["source"], []).append(entry)
+
+    missing_count = sum(1 for e in entries if e["status"] == "missing")
+    intro = f"本日共收录 {len(entries)} 篇文章，按来源分类整理。"
+    if missing_count:
+        intro += f"其中 {missing_count} 篇未能生成本地归档，已在页内标注并链接原文。"
 
     parts = []
     parts.append('<header class="article-header">')
     parts.append(f'<h1 class="article-title">{html_escape(today)} 归档</h1>')
     parts.append(
         '<div class="article-meta">'
-        f'<span class="index-intro">本日共收录 {len(results)} 篇文章，按来源分类整理。</span>'
+        f'<span class="index-intro">{html_escape(intro)}</span>'
         "</div>"
     )
     parts.append("</header>")
 
     sorted_sources = sorted(source_groups.items(), key=lambda x: len(x[1]), reverse=True)
     for i, (source, articles) in enumerate(sorted_sources):
-        if not articles:
-            continue
         num = chinese_nums[i] if i < len(chinese_nums) else str(i + 1)
         parts.append(
             f'<h2 class="index-source">{num}、{html_escape(source)}（{len(articles)} 篇）</h2>'
         )
         parts.append('<ul class="index-list">')
-        for r in articles:
-            href = quote(r["filename"])
-            display = html_escape(r["display_title"])
-            digest = _summary_digest(r["summary"])
-            parts.append(
-                f'<li class="index-item"><a href="./{href}" target="_blank" rel="noopener noreferrer">{display}</a>'
-                f'<div class="digest">{digest}</div></li>'
-            )
+        for entry in articles:
+            display = html_escape(entry["display_title"])
+
+            if entry["status"] == "missing":
+                if entry.get("url"):
+                    anchor = (
+                        f'<a href="{html_escape(entry["url"], quote=True)}"'
+                        f' target="_blank" rel="noopener noreferrer">{display}</a>'
+                    )
+                else:
+                    anchor = f"<a>{display}</a>"
+                parts.append(
+                    f'<li class="index-item">{anchor}'
+                    f'<div class="digest digest-failed">{html_escape(entry["note"])}</div></li>'
+                )
+                continue
+
+            href = quote(entry["filename"])
+            anchor = f'<a href="./{href}" target="_blank" rel="noopener noreferrer">{display}</a>'
+
+            if entry["status"] == "summary-failed":
+                body = f'<div class="digest digest-warn">{html_escape(entry["note"])}</div>'
+                if entry.get("url"):
+                    safe_url = html_escape(entry["url"], quote=True)
+                    body += (
+                        '<div class="digest">原文：'
+                        f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer">'
+                        f'{html_escape(entry["url"])}</a></div>'
+                    )
+            else:
+                body = f'<div class="digest">{_summary_digest(entry.get("summary"))}</div>'
+
+            parts.append(f'<li class="index-item">{anchor}{body}</li>')
         parts.append("</ul>")
 
     page = render_document(f"{today} 归档", "\n".join(parts))
     index_path.write_text(page, encoding="utf-8")
 
 
-def _summarize_step(today, log, should_stop=None):
-    """步骤 4：AI 生成文章摘要并生成当日索引页（返回失败明细）"""
+def _summarize_step(today, log, article_list=None, missing_notes=None, should_stop=None):
+    """步骤 4：AI 生成文章摘要并生成当日索引页
+
+    索引页以文章列表 JSON 为准（JSON 有多少条就列多少条）；转换失败（无本地 HTML）
+    与摘要失败的条目在页内标注，缺本地 HTML 的条目标题直链原文。
+    """
     from summarize import (load_config, create_client, scan_html_files,
                            extract_source, process_article, MAX_WORKERS)
+
+    missing_notes = missing_notes or {}
+    if article_list is None:
+        article_list = _load_article_list(today)
+        if article_list:
+            log(f"📂 从文件加载了 {len(article_list)} 篇文章用于生成索引页")
+
+    folder = OUTPUT_BASE_DIR / today
+    if not folder.exists() and not article_list:
+        log(f"⚠️  文件夹与文章列表均不存在: {folder}，跳过总结步骤")
+        return None
+
+    html_files = scan_html_files(folder, today) if folder.exists() else []
+
+    summary_by_file = {}
+    failure_by_file = {}
+    failures = []
+    processed = 0
 
     try:
         config = load_config()
     except SystemExit:
-        log("⚠️  未找到 config.json 或配置无效，跳过总结步骤")
-        return None
+        config = None
+        log("⚠️  未找到 config.json 或配置无效，本次不生成 AI 摘要（索引页仍会生成）")
 
-    client = create_client(config)
-    model = config["model"]
-
-    folder = OUTPUT_BASE_DIR / today
-    if not folder.exists():
-        log(f"⚠️  文件夹不存在: {folder}，跳过总结步骤")
-        return None
-
-    html_files = scan_html_files(folder, today)
     if not html_files:
-        log("⚠️  没有找到需要总结的 .html 文件")
-        return None
+        log("⚠️  没有找到可总结的 .html 文件，索引页将按文章列表生成并标注缺失项")
+    elif config is None:
+        for html_file in html_files:
+            failure_by_file[html_file.name] = "未配置可用的 AI API"
+    else:
+        client = create_client(config)
+        model = config["model"]
 
-    source_files = {}
-    for f in html_files:
-        source = extract_source(f.name)
-        source_files.setdefault(source, []).append(f)
+        source_files = {}
+        for f in html_files:
+            source_files.setdefault(extract_source(f.name), []).append(f)
 
-    total_count = len(html_files)
-    log(f"找到 {total_count} 篇文章待处理，来源分布:")
-    for source, files in sorted(source_files.items(), key=lambda x: len(x[1]), reverse=True):
-        log(f"  - {source}: {len(files)} 篇")
-    log("")
+        total_count = len(html_files)
+        log(f"找到 {total_count} 篇文章待处理，来源分布:")
+        for source, files in sorted(source_files.items(), key=lambda x: len(x[1]), reverse=True):
+            log(f"  - {source}: {len(files)} 篇")
+        log("")
 
-    results = []
-    processed = 0
-    failures = []
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            future_to_file = {
+                executor.submit(process_article, client, model, html_file, today): html_file
+                for html_file in html_files
+            }
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_to_file = {
-            executor.submit(process_article, client, model, html_file, today): html_file
-            for html_file in html_files
-        }
+            for future in as_completed(future_to_file):
+                if should_stop and should_stop():
+                    executor.shutdown(wait=False)
+                    break
 
-        for future in as_completed(future_to_file):
-            if should_stop and should_stop():
-                executor.shutdown(wait=False)
-                break
+                result = future.result()
+                if result["success"]:
+                    processed += 1
+                    summary_by_file[result["filename"]] = result
+                    log(f"  ✓ [{processed}/{total_count}] {result['filename']}")
+                else:
+                    failure_by_file[result["filename"]] = result["error"]
+                    failures.append((result["filename"], result["error"]))
+                    log(f"  ✗ {result['filename']}: {result['error']}")
 
-            result = future.result()
-            if result["success"]:
-                processed += 1
-                log(f"  ✓ [{processed}/{total_count}] {result['filename']}")
-                results.append(result)
-            else:
-                failures.append((result["filename"], result["error"]))
-                log(f"  ✗ {result['filename']}: {result['error']}")
+    if article_list:
+        entries = _build_index_entries(today, article_list, summary_by_file,
+                                       failure_by_file, missing_notes)
+    else:
+        log("⚠️  未找到文章列表 JSON，索引页回退为按成品文件生成")
+        entries = _build_entries_from_files(html_files, summary_by_file, failure_by_file)
 
     log("\n正在生成索引页...")
     index_path = folder / f"{today}.html"
-    _write_index_page(today, index_path, results)
+    index_error = None
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        _write_index_page(today, index_path, entries)
+        log(f"已保存: {index_path}")
+        if article_list:
+            log(f"索引页共 {len(entries)} 条（文章列表 {len(article_list)} 条）")
+    except Exception as exc:  # 索引页失败不掩盖摘要结果
+        index_error = f"{type(exc).__name__}: {exc}"
+        log(f"✗ 索引页生成失败: {index_error}")
 
-    log(f"已保存: {index_path}")
-    return {"processed": processed, "failed": len(failures), "failures": failures, "path": index_path}
+    return {"processed": processed, "failed": len(failures), "failures": failures,
+            "path": index_path, "entries": len(entries), "index_error": index_error}
 
 
 def run_archive(selected_steps, today, log, on_progress=None, should_stop=None):
@@ -208,7 +381,8 @@ def run_archive(selected_steps, today, log, on_progress=None, should_stop=None):
     返回:
         dict 包含 article_list / download / conversion / summary_result /
              step_times / error / failures
-        failures 为字符串列表，汇总任一环节的失败原因（供邮件通知判定）
+        failures 为字符串列表，仅汇总**系统性/流程级**失败（步骤 1 抓取或列表加载失败、
+        流程 error），供邮件通知判定；步骤 2/3/4 的逐条内容失败在索引页内标注，不进邮件
     """
     from folo_export import export_articles
     from render_html import scan_and_convert
@@ -228,6 +402,8 @@ def run_archive(selected_steps, today, log, on_progress=None, should_stop=None):
     step_times = {}
     error = None
     failures = []
+    # 期望文件名 -> 缺失原因（下载/渲染失败），供索引页就地标注
+    missing_notes = {}
 
     def should_run(step_num):
         return step_num in selected_steps
@@ -303,8 +479,13 @@ def run_archive(selected_steps, today, log, on_progress=None, should_stop=None):
             article_list, today, log, on_progress
         )
 
+        # 逐条下载失败只记入索引页标注（不进邮件）
         for idx, title, url, reason in failed:
-            failures.append(f"步骤 2 下载失败: {title} - {reason}")
+            if isinstance(idx, int) and 1 <= idx <= len(article_list):
+                name = _expected_filename(article_list[idx - 1])
+            else:
+                name = _expected_filename({"title": title})
+            missing_notes.setdefault(name, f"下载失败：{reason}")
     else:
         log(f"[步骤 2/{total_steps}] 下载网页 - ⏭️ 跳过")
 
@@ -323,10 +504,11 @@ def run_archive(selected_steps, today, log, on_progress=None, should_stop=None):
         step_times[3] = time.time() - step_start
         log(f"  ⏱ 耗时: {format_duration(step_times[3])}")
 
+        # 渲染失败/未识别来源同样只记入索引页标注（不进邮件）
         for name, reason in conversion.get("failed", []):
-            failures.append(f"步骤 3 渲染失败: [{reason}] {name}")
+            missing_notes.setdefault(name, f"渲染失败：{reason}")
         for name, _ in conversion.get("unknown", []):
-            failures.append(f"步骤 3 未识别来源: {name}")
+            missing_notes.setdefault(name, "渲染失败：未识别来源，缺少解析策略")
     else:
         log(f"[步骤 3/{total_steps}] 渲染 HTML - ⏭️ 跳过")
 
@@ -341,13 +523,13 @@ def run_archive(selected_steps, today, log, on_progress=None, should_stop=None):
             on_progress(80, "步骤 4: AI 摘要...")
 
         step_start = time.time()
-        summary_result = _summarize_step(today, log, should_stop)
+        summary_result = _summarize_step(today, log, article_list, missing_notes, should_stop)
         step_times[4] = time.time() - step_start
         log(f"  ⏱ 耗时: {format_duration(step_times[4])}")
 
-        if summary_result:
-            for filename, err in summary_result.get("failures", []):
-                failures.append(f"步骤 4 摘要失败: {filename} - {err}")
+        # 逐条摘要失败已在索引页标注（不进邮件）；索引页自身写入失败才算流程问题
+        if summary_result and summary_result.get("index_error"):
+            failures.append(f"步骤 4 索引页生成失败: {summary_result['index_error']}")
     else:
         log(f"[步骤 4/{total_steps}] AI 摘要 - ⏭️ 跳过")
 

@@ -68,11 +68,26 @@ cp src/config.example.json src/config.json
 
 ## 🚀 使用
 
-### 网页版界面（推荐）
+### 桌面小窗口（推荐，无终端黑框）
+
+双击 `启动Folo.bat`，弹出一个只有三个按钮的小窗口：**今日归档 / 打开 web 页面 / 退出服务**。窗口不显示日志，进度与日志都在网页版界面里看。
+
+- 用 `pythonw.exe` 启动，不会留下控制台窗口
+- **关闭窗口不会退出**：窗口收进系统托盘继续后台跑（每日定时照常生效），右键托盘图标可「打开主窗口 / 今日归档 / 退出」，双击图标唤回窗口
+- 要彻底退出，用托盘右键的「退出」或窗口里的「退出服务」按钮
+
+> 需要 Python 自带 `tkinter`（python.org 安装程序默认勾选「tcl/tk and IDLE」）。若缺失，可改用下面的网页版模式，或重跑安装程序 → Modify → 勾选后重建 `.venv`。
+
+```bash
+.venv/Scripts/pythonw.exe src/gui.py           # 等价于双击 启动Folo.bat
+.venv/Scripts/python.exe  src/gui.py --port 9000   # 带控制台，便于排查
+```
+
+### 网页版界面（无需 tkinter / 服务器适用）
 
 ```bash
 .venv/Scripts/python.exe src/webui.py          # 默认 127.0.0.1:8765，自动打开浏览器
-# 或双击 启动Web界面.bat
+# 或双击 启动Web界面.bat（控制台模式，Ctrl+C 退出）
 ```
 
 - 勾选要执行的步骤，选择日期，点击「开始执行」，页面实时显示日志、进度与各步骤耗时
@@ -109,6 +124,8 @@ cp src/config.example.json src/config.json
 | 全部模块说明 | [doc/](doc/) |
 | 来源策略 | [doc/strategies.md](doc/strategies.md) |
 | 核心流程 | [doc/archive_core.md](doc/archive_core.md) |
+| 桌面小窗口 | [doc/gui.md](doc/gui.md) |
+| 系统托盘图标 | [doc/trayicon.md](doc/trayicon.md) |
 | 网页版界面 | [doc/webui.md](doc/webui.md) |
 | 热力图 | [doc/heatmap.md](doc/heatmap.md) |
 | 失败邮件 | [doc/notify.md](doc/notify.md) |
@@ -120,6 +137,7 @@ cp src/config.example.json src/config.json
 ## 🛠 技术栈
 
 - Python 3.10+（标准库为主）
+- 桌面小窗口（标准库 `tkinter`，需 Python 安装时保留 tcl/tk）
 - 本地网页版界面（标准库 `http.server`，零第三方依赖）
 - DeepSeek API（AI 摘要）
 - Node.js `folocli`（获取 Folo 未读列表）

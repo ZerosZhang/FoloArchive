@@ -815,6 +815,90 @@ def _load_web_config():
     return result
 
 
+# =============================================================================
+# 服务生命周期（webui.main 与桌面窗口 src/gui.py 共用）
+# =============================================================================
+class Service:
+    """已创建的网页版服务：持有 HTTP 服务器与对外访问地址
+
+    桌面窗口（gui.py）把它跑在后台线程里，因此能在**同一进程内**直接调用
+    start_run() / state_payload() / request_stop()，不需要子进程与进程间通信；
+    webui.main() 则跑在当前线程里，由 Ctrl+C 结束。
+    """
+
+    def __init__(self, httpd, host, port, url):
+        self.httpd = httpd
+        self.host = host
+        self.port = port
+        self.url = url
+        self._thread = None
+
+    def serve_in_background(self):
+        """在后台 daemon 线程开始接收请求（桌面窗口用，不阻塞调用方）"""
+        if self._thread is None:
+            self._thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+            self._thread.start()
+        return self
+
+    def serve_forever(self):
+        """在当前线程开始接收请求（命令行用，可被 Ctrl+C 中断）"""
+        self.httpd.serve_forever()
+
+    def stop(self):
+        """停止接收请求并关闭监听套接字；可重复调用"""
+        try:
+            self.httpd.shutdown()
+        except Exception:  # noqa: BLE001 - 已停止时可能报错，忽略即可
+            pass
+        try:
+            self.httpd.server_close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def resolve_host_port(host=None, port=None):
+    """按「入参 → config.json 的 web 段 → 默认值」确定监听地址，返回 (host, port)"""
+    web_cfg = _load_web_config()
+    host = host or web_cfg.get("host") or DEFAULT_HOST
+    port = port or web_cfg.get("port") or DEFAULT_PORT
+    if not (1 <= port <= 65535):
+        port = DEFAULT_PORT
+    return host, port
+
+
+def _display_url(host, port):
+    """对外展示的访问地址：0.0.0.0 这类监听地址换成 127.0.0.1"""
+    display_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
+    return f"http://{display_host}:{port}/"
+
+
+def start_service(host=None, port=None, schedule=True, mirror=None):
+    """建好网页版服务并返回 Service（此时尚未开始 serve）
+
+    依次：建 HTTP 服务 → 把 stdout/stderr 接到日志缓冲区（mirror 非空时同时
+    镜像到该流）→ 启动内建定时。端口被占用等情况下抛 OSError，由调用方提示。
+    """
+    host, port = resolve_host_port(host, port)
+    httpd = ThreadingHTTPServer((host, port), Handler)
+    httpd.daemon_threads = True
+
+    LOG.set_mirror(mirror)
+    sys.stdout = LOG
+    sys.stderr = LOG
+
+    url = _display_url(host, port)
+    LOG.append("=" * 60)
+    LOG.append(f"Folo 网页版界面已启动：{url}")
+    LOG.append("=" * 60)
+
+    if schedule:
+        start_scheduler()
+    else:
+        disable_scheduler()
+
+    return Service(httpd, host, port, url)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Folo 文章归档 —— 本地网页版界面（纯标准库）",
@@ -829,54 +913,31 @@ def parse_args():
 
 def main():
     args = parse_args()
-    web_cfg = _load_web_config()
 
-    host = args.host or web_cfg.get("host") or DEFAULT_HOST
-    port = args.port or web_cfg.get("port") or DEFAULT_PORT
-    if not (1 <= port <= 65535):
-        print(f"[!] 端口无效: {port}，回退到 {DEFAULT_PORT}")
-        port = DEFAULT_PORT
-
+    # 重定向 stdout/stderr 到日志缓冲区，并镜像一份到原始终端（mirror 必须先取原流）
     try:
-        httpd = ThreadingHTTPServer((host, port), Handler)
+        service = start_service(args.host, args.port,
+                                schedule=not args.no_schedule, mirror=sys.stdout)
     except OSError as exc:
-        print(f"[!] 无法监听 {host}:{port} —— {exc}")
+        print(f"[!] 无法启动服务 —— {exc}")
         print("    端口可能已被占用，可换一个：python src/webui.py --port 8766")
         return 1
-    httpd.daemon_threads = True
 
-    # 重定向 stdout/stderr 到日志缓冲区，并镜像一份到原始终端
-    origin_stdout = sys.stdout
-    LOG.set_mirror(origin_stdout)
-    sys.stdout = LOG
-    sys.stderr = LOG
-
-    display_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
-    url = f"http://{display_host}:{port}/"
-    LOG.append("=" * 60)
-    LOG.append(f"Folo 网页版界面已启动：{url}")
     LOG.append("归档请用页面上的按钮；按 Ctrl+C 退出服务")
-    LOG.append("=" * 60)
-
-    # 内建定时：默认开启；取不到互斥量说明外部调度器在跑，本进程不重复调度
-    if args.no_schedule:
-        disable_scheduler()
-    else:
-        start_scheduler()
 
     if not args.no_browser:
         try:
-            webbrowser.open(url)
+            webbrowser.open(service.url)
         except Exception:  # noqa: BLE001 - 打不开浏览器不影响服务
             pass
 
     try:
-        httpd.serve_forever()
+        service.serve_forever()
     except KeyboardInterrupt:
         LOG.append("")
         LOG.append("[WebUI] 收到中断，正在退出…")
     finally:
-        httpd.server_close()
+        service.stop()
     return 0
 
 

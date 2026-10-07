@@ -2,8 +2,10 @@
 
 ## 用途
 
-`src/webui.py` 是项目唯一的图形界面：一个只用标准库的本地 HTTP 服务 + 单页界面，
-用浏览器完成归档工作，**不引入任何第三方库**。
+`src/webui.py` 是一个只用标准库的本地 HTTP 服务 + 单页界面，用浏览器完成归档工作，
+**不引入任何第三方库**。它既可以单独作为界面使用，也可以被桌面小窗口
+（`src/gui.py`，见 [gui.md](gui.md)）嵌进同一个进程里跑——那时窗口只负责「归档 / 打开页面 / 退出」，
+界面本身仍是这个网页。
 
 页面功能：
 
@@ -18,15 +20,18 @@
   `assets/` 图片，从日历点击即可跳转查看（只读，防路径穿越）
 - 常驻定时：**内建调度线程**（默认开启），每天到设定时刻自动跑一次完整归档；
   也可用 `--no-schedule` 关闭，改由独立调度器 `src/scheduler.py` 负责（两者互斥）
-- 失败邮件：运行结束后 `failures` 非空时按 `config.json` 的 `mail` 段发信
+- 失败邮件：运行结束后 `failures` 非空时按 `config.json` 的 `mail` 段发信（`failures` 只含系统性/流程级失败；
+  下载/渲染/摘要的逐条内容失败在当日索引页内标注，不再发邮件）
 
 ## 新增文件
 
 | 文件 | 说明 |
 |------|------|
-| `src/webui.py` | HTTP 服务 + 全部后端逻辑（日志捕获、运行线程、热力图、内建定时调度、邮件） |
+| `src/webui.py` | HTTP 服务 + 全部后端逻辑（日志捕获、运行线程、热力图、内建定时调度、邮件、服务生命周期） |
 | `src/webui_page.py` | 单页 HTML/CSS/JS，作为字符串常量 `PAGE`，由 `GET /` 返回 |
+| `src/gui.py` | 桌面小窗口，进程内嵌本服务（见 [gui.md](gui.md)） |
 | `启动Web界面.bat` | 双击启动（纯 ASCII，前台运行以便 Ctrl+C 停止） |
+| `启动Folo.bat` | 双击启动桌面小窗口（`pythonw`，无控制台） |
 
 ## 运行
 
@@ -83,6 +88,21 @@
 - 可选镜像流：每行同时写回原始终端，命令行仍能看到输出；
 - 重写了 `BaseHTTPRequestHandler.log_message` 使其静音，避免 HTTP 访问日志混入归档日志。
 
+### 服务生命周期（`Service` / `start_service`）
+
+`webui.main()` 与桌面小窗口 `src/gui.py` 共用这一层，避免两份启动代码：
+
+| 成员 | 说明 |
+|------|------|
+| `start_service(host=None, port=None, schedule=True, mirror=None) -> Service` | 建 HTTP 服务 → 把 `stdout`/`stderr` 接到 `LOG`（`mirror` 非空时同时镜像到该流）→ 打印启动横幅 → 按 `schedule` 启动或关闭内建定时。端口被占用等抛 `OSError`，由调用方提示 |
+| `resolve_host_port(host, port)` | 「入参 → `config.json` 的 `web` 段 → 默认值」三级回退 |
+| `Service.serve_in_background()` | 后台 daemon 线程 `serve_forever`（桌面窗口用，不阻塞调用方） |
+| `Service.serve_forever()` | 当前线程 `serve_forever`（命令行用，可被 Ctrl+C 中断） |
+| `Service.stop()` | `shutdown()` + `server_close()`，可重复调用 |
+
+`main()` 里 `mirror=sys.stdout` 必须在调用前求值——`start_service` 一旦执行就把
+`sys.stdout` 换成了日志缓冲区。
+
 ### 运行与并发
 
 归档在后台 daemon 线程里跑，HTTP 服务用 `ThreadingHTTPServer` 保持响应。
@@ -93,7 +113,7 @@
 运行结束（含异常）后在 `finally` 里清理状态、`flush_partial()` 残余行，再调用
 `_notify_failures()`：`failures` 非空 → `notify.load_mail_config()`，配置存在则
 `format_failure_report` + `send_failure_mail` 并写日志，未配置则只记一行提示，
-全程 try/except，绝不抛异常。
+全程 try/except，绝不抛异常。这里的 `failures` 与 CLI 同源，只含系统性/流程级失败。
 
 ### 阅读状态日历（原热力图）与已读状态
 

@@ -5,6 +5,13 @@ rem
 rem  Starts src\webui.py in the foreground so Ctrl+C stops it.
 rem  Open http://127.0.0.1:8765/ in a browser (opened automatically).
 rem
+rem  This is the console (headless-friendly) mode: a terminal window
+rem  stays open. For the desktop window with buttons, use the other
+rem  launcher in this folder (the "desktop" one).
+rem
+rem  Keep this file PURE ASCII: cmd.exe reads .bat in the OEM code
+rem  page, so UTF-8 Chinese text here would corrupt parsing.
+rem
 rem  Extra args are forwarded, e.g.:
 rem    start-webui.bat --port 9000 --no-browser
 rem ==============================================================

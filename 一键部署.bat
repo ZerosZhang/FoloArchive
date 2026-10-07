@@ -87,6 +87,18 @@ echo [5/6] Checking the CLI ...
 if errorlevel 1 goto :err_selfcheck
 echo       ok
 
+rem tkinter is needed by the desktop window (src\gui.py); the web UI does not
+rem need it. It ships with the python.org installer unless "tcl/tk" was unticked.
+"%VPY%" -c "import tkinter" >nul 2>&1
+if errorlevel 1 (
+    echo       [WARN] tkinter is missing - the desktop window cannot start.
+    echo              Re-run the Python installer -^> Modify -^> tick
+    echo              "tcl/tk and IDLE", then run this script again.
+    echo              The web UI still works.
+) else (
+    echo       tkinter ^(desktop window^) ... ok
+)
+
 rem ------------------------------------------------- 6. config / login
 echo.
 echo [6/6] Configuration ...
@@ -115,22 +127,20 @@ echo   Scripts in this folder:
 for %%F in ("%~dp0*.bat") do echo     - %%~nxF
 echo.
 echo   Hints:
-echo     * "Web" launcher    : opens the browser UI
-echo     * resident launcher : keeps running in the background, archives
-echo                           once a day at the time set in config.json
-echo     * daily launcher    : run it once now, or call it with
-echo                             install 08:00   create a scheduled task
-echo                             status          show task status
-echo                             remove          delete the task
+echo     * desktop launcher  : opens the small window (archive / open page / quit)
+echo     * web launcher      : console mode, opens the browser UI and stays open
+echo.
+echo   Note: keep every .bat in this folder PURE ASCII - cmd.exe reads
+echo         them in the OEM code page, so UTF-8 Chinese text would break them.
 echo.
 echo   Reminder: api.folo.is may need a proxy on this network.
 echo             Verify with:  npx --yes folocli@latest whoami
 echo.
 
-set /p "STARTNOW=Start the web UI now? [Y/N]: "
+set /p "STARTNOW=Start the desktop window now? [Y/N]: "
 if /i "%STARTNOW%"=="Y" (
-    echo Starting web UI ...
-    start "Folo Web UI" cmd /k ".venv\Scripts\python.exe src\webui.py"
+    echo Starting the desktop window ...
+    start "" ".venv\Scripts\pythonw.exe" "src\gui.py"
 )
 
 echo.

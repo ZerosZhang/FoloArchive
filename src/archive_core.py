@@ -201,7 +201,7 @@ def _build_entries_from_files(html_files, summary_by_file, failure_by_file):
 
 def _write_index_page(today, index_path, entries):
     """生成当日 HTML 汇总索引页：按来源分组，逐条给出链接与摘要/失败说明"""
-    from render_html import render_document
+    from render_html import render_document, write_style_sheet
 
     chinese_nums = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十",
                     "十一", "十二", "十三", "十四", "十五", "十六", "十七", "十八", "十九", "二十"]
@@ -268,6 +268,7 @@ def _write_index_page(today, index_path, entries):
         parts.append("</ul>")
 
     page = render_document(f"{today} 归档", "\n".join(parts))
+    write_style_sheet(index_path.parent)
     index_path.write_text(page, encoding="utf-8")
 
 

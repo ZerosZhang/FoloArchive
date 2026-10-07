@@ -149,6 +149,11 @@
 404（`is_relative_to` 同时挡住符号链接逃逸）。按扩展名设置 `Content-Type`（HTML/CSS/JS/
 图片/JSON/TXT 等，未知回退 `application/octet-stream`），响应带 `Cache-Control: no-store`。
 
+成品页的样式外链到数据根目录的 `../style.css`。页面 URL 形如
+`/archive/<日期>/x.html`，浏览器会把 `../style.css` 解析成 `/archive/style.css`，
+于是 `_resolve_archive_file("style.css")` 命中 `result/style.css`（`.css` 已在
+Content-Type 表里，返回 `text/css; charset=utf-8`）——不需要额外加路由。
+
 ### 内建定时调度
 
 默认开启：网页版进程自己每天跑一次完整归档，因此**只开一个进程**即可同时提供界面与定时。

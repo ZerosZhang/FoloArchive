@@ -17,9 +17,22 @@
 ## 输入输出
 
 - 输入：`result/temp_data/raw/<日期>/` 下的原始 HTML
-- 输出：`result/<日期>/「来源」标题.html` + `assets/` 图片目录
+- 输出：`result/<日期>/「来源」标题.html` + `assets/` 图片目录，以及**数据根目录**的 `result/style.css`
 
 原始 HTML 与成品 HTML 分目录存放，避免同名 `.html` 相互覆盖。
+
+**HTML 只放内容，样式全在数据根目录的一份 `style.css`**：成品页 `<head>` 里只有
+`<link rel="stylesheet" href="../style.css">`，没有任何 `<style>` 块。
+`write_style_sheet(page_dir)` 把 `BASE_CSS` 写到 `page_dir` 的**上一级**（即 `result/`），
+所以所有日期、所有页面（文章页 + 索引页）共用同一份样式：
+
+- 改 `result/style.css` 一个文件，全部页面立刻跟着变，页面文件本身不用动；
+- 内容与现有文件一致时跳过写入，重渲染不会白白改动 mtime（对 NAS / 同步盘友好）。
+
+> 代价：`result/` 根下的 `style.css` 是日期目录之外的公共文件。单独把**一个**日期目录
+> 拷到 NAS 会掉样式，需要连 `result/style.css` 一起带（整个 `result/` 同步则不受影响）。
+> webui 预览不受影响：页面 URL 是 `/archive/<日期>/x.html`，`../style.css` 会被浏览器
+> 解析成 `/archive/style.css`，正好命中 `result/style.css`。
 
 ## 渲染流程
 
@@ -27,8 +40,9 @@
 2. **策略识别**：`resolve_strategy(html, filename_hint)`，文件名提示优先于 JSON 的 feed_title
 3. **提取正文**：`strategy.extract_body()` + `strategy.extract_blocks()` → `[(h2标题或None, 块HTML)]`，跳过 `skip_titles`
 4. **清洗**：剥离 `<script>/<style>/<iframe>`、`on*` 事件属性、`javascript:` 链接
-5. **套模板**：`render_document()` 输出含 `<!DOCTYPE html>`、`<meta charset>`、`<meta name="viewport">` 与内联响应式 CSS 的完整文档；`<header>` 保留来源/发布时间/原文链接，正文包在 `<article class="article-body">`，并预留 `<section class="ai-summary" data-folo="summary">` 空区块
+5. **套模板**：`render_document()` 输出含 `<!DOCTYPE html>`、`<meta charset>`、`<meta name="viewport">` 与外链 `../style.css` 的完整文档；`<header>` 保留来源/发布时间/原文链接，正文包在 `<article class="article-body">`，并预留 `<section class="ai-summary" data-folo="summary">` 空区块
 6. **图片本地化**：从 `<img src>`（兼容 `data-src`/`data-lazy-src`/`data-original` 懒加载属性）收集远程 URL，并发下载到 `assets/`（用 URL 摘要命名，重跑幂等），把 `src` 改写为 `./assets/xxx`；已是 `./assets/...` 或 `data:` 的图片跳过
+7. **写样式**：`write_style_sheet()` 把 `BASE_CSS` 落到数据根目录 `result/style.css`（内容相同则跳过）
 
 ## 输出与状态
 

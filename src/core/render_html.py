@@ -14,7 +14,8 @@
     python render_html.py <html文件路径>
 
 输出:
-    日期目录下的同名 .html 成品文件
+    日期目录下的同名 .html 成品文件（HTML 只放内容，样式外链）
+    + 数据根目录 result/style.css：所有日期、所有页面共用的一份样式表
 """
 
 import hashlib
@@ -39,7 +40,12 @@ from utils import TEMP_DIR, RAW_DIR, OUTPUT_BASE_DIR
 # 1. 响应式模板
 # =============================================================================
 
-# 文章页与索引页共用的内联样式，保证手机端可读
+# 公共样式表：放在数据根目录（result/），日期目录下的页面用 ../style.css 引用它。
+# 一处修改，所有日期的文章页与索引页立刻跟着变。
+STYLE_FILENAME = "style.css"
+STYLE_HREF = f"../{STYLE_FILENAME}"
+
+# 文章页与索引页共用的样式，保证手机端可读
 BASE_CSS = """
 * { box-sizing: border-box; }
 body {
@@ -80,8 +86,30 @@ body {
 """.strip()
 
 
+def write_style_sheet(page_dir):
+    """把公共样式表写到 page_dir 的**上一级**（数据根目录，如 result/），返回其路径
+
+    日期目录下的页面都链 `../style.css`，所以样式表放在数据根目录而不是每个日期
+    目录各一份：改这一个文件，所有日期的页面立刻跟着变。整个 result/ 共用一份。
+
+    内容与现有文件一致时跳过写入：重渲染不会白白改动 mtime，对 NAS / 同步盘更友好。
+    """
+    path = Path(page_dir).parent / STYLE_FILENAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if path.read_text(encoding="utf-8") == BASE_CSS:
+            return path
+    except OSError:
+        pass
+    path.write_text(BASE_CSS, encoding="utf-8")
+    return path
+
+
 def render_document(title, body_html, lang="zh-CN"):
-    """用统一模板包裹正文，输出完整 HTML 文档"""
+    """用统一模板包裹正文，输出完整 HTML 文档
+
+    HTML 只放内容，样式外链到数据根目录的 style.css（由 write_style_sheet() 生成）。
+    """
     return (
         "<!DOCTYPE html>\n"
         f'<html lang="{lang}">\n'
@@ -89,9 +117,7 @@ def render_document(title, body_html, lang="zh-CN"):
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f"<title>{html.escape(title)}</title>\n"
-        "<style>\n"
-        f"{BASE_CSS}\n"
-        "</style>\n"
+        f'<link rel="stylesheet" href="{STYLE_HREF}">\n'
         "</head>\n"
         "<body>\n"
         '<main class="wrap">\n'
@@ -579,6 +605,7 @@ def convert_file(html_path, output_path=None, download_img=True):
     if download_img:
         page = localize_images(page, base_url, output_path.parent / "assets", output_path.parent.name)
 
+    write_style_sheet(output_path.parent)
     output_path.write_text(page, encoding="utf-8")
     return output_path, strategy.name, True, page, base_url
 

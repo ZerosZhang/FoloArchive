@@ -68,6 +68,7 @@ run_archive(selected_steps, today, log, on_progress=None, should_stop=None) -> d
 - 步骤 3 原始 HTML 与成品 HTML 分目录存放：原始在 `temp_data/raw/<日期>/`，成品在 `result/<日期>/`，避免同名相互覆盖；`scan_and_convert` 对 raw 目录下所有 `*.html` 逐个重渲染，**本来就是覆盖写**
 - 步骤 4 每次都重新调用 API 生成摘要并覆盖旧摘要区块，**不再因「已有摘要」而跳过**
 - 步骤 4 生成 `result/<日期>/YYYY年MM月DD日.html` 索引页，按来源分组（篇数降序 + 中文序号），每篇链接到成品 HTML 并附摘要；文章链接带 `target="_blank"`，**在新标签页打开**，避免从总览跳转时覆盖当前页面
+- 索引页同样**只放内容**：`_write_index_page()` 调 `render_document()` 外链 `../style.css`，并调 `write_style_sheet()` 把样式落到数据根目录 `result/style.css`（与所有日期的文章页共用同一份样式表）
 - **索引页以文章列表 JSON 为准**：`_build_index_entries()` 逐条遍历 `result/temp_data/「日期」.json`，用 `_expected_filename()`（`「{sanitize_filename(feed_title)}」{sanitize_filename(title)}.html`，与步骤 2 命名规则一致）推出期望文件名 → **JSON 有多少条，索引页就列多少条**；匹配时先精确命中，未命中再用 `_normalize_filename()`（去掉 `_1` 后缀）宽松匹配；目录中不在 JSON 里的成品文件也会补列，避免历史数据被漏掉
 - 索引页条目三态：`ok`（有成品 + 有摘要）、`summary-failed`（有成品但摘要失败，页内 `.digest-warn` 标注并附原文链接）、`missing`（没有成品，页内 `.digest-failed` 标注「点击标题跳转原文」，**标题直链 JSON 的 `url`**）
 - 缺失原因来自步骤 2/3 收集的 `missing_notes`（`下载失败：…` / `渲染失败：…` / 未识别来源），步骤 3 未跑或映射不到时用兜底文案

@@ -47,7 +47,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   line-height: 1.7; font-size: 16px; color: #1a1a1a; background: #f5f5f5;
 }
-.wrap { max-width: 760px; margin: 0 auto; background: #fff; padding: 24px; border-radius: 8px; }
+.wrap { max-width: 1140px; margin: 0 auto; background: #fff; padding: 24px; border-radius: 8px; }
 .article-header { border-bottom: 1px solid #e5e5e5; padding-bottom: 12px; margin-bottom: 16px; }
 .article-title { font-size: 1.6em; line-height: 1.3; margin: 0 0 8px; }
 .article-meta { font-size: 0.85em; color: #666; display: flex; flex-direction: column; gap: 2px; word-break: break-all; }

@@ -272,9 +272,11 @@ def _write_index_page(today, index_path, entries):
     index_path.write_text(page, encoding="utf-8")
 
 
-def _summarize_step(today, log, article_list=None, missing_notes=None, should_stop=None):
+def _summarize_step(today, log, article_list=None, missing_notes=None, should_stop=None,
+                    force=False):
     """步骤 4：AI 生成文章摘要并生成当日索引页
 
+    已有摘要的文章默认跳过（断点续跑，只补没摘要的那几篇）；force=True 时全部重算。
     索引页以文章列表 JSON 为准（JSON 有多少条就列多少条）；转换失败（无本地 HTML）
     与摘要失败的条目在页内标注，缺本地 HTML 的条目标题直链原文。
     """
@@ -298,6 +300,7 @@ def _summarize_step(today, log, article_list=None, missing_notes=None, should_st
     failure_by_file = {}
     failures = []
     processed = 0
+    skipped = 0
 
     try:
         config = load_config()
@@ -323,10 +326,11 @@ def _summarize_step(today, log, article_list=None, missing_notes=None, should_st
         for source, files in sorted(source_files.items(), key=lambda x: len(x[1]), reverse=True):
             log(f"  - {source}: {len(files)} 篇")
         log("")
+        log("已有摘要的文章跳过（--force 可全部重算）" if not force else "全部重算（force=True）")
 
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             future_to_file = {
-                executor.submit(process_article, client, model, html_file, today): html_file
+                executor.submit(process_article, client, model, html_file, today, force): html_file
                 for html_file in html_files
             }
 
@@ -339,7 +343,11 @@ def _summarize_step(today, log, article_list=None, missing_notes=None, should_st
                 if result["success"]:
                     processed += 1
                     summary_by_file[result["filename"]] = result
-                    log(f"  ✓ [{processed}/{total_count}] {result['filename']}")
+                    if result.get("skipped"):
+                        skipped += 1
+                        log(f"  · [跳过] {result['filename']}（已有摘要）")
+                    else:
+                        log(f"  ✓ [{processed}/{total_count}] {result['filename']}")
                 else:
                     failure_by_file[result["filename"]] = result["error"]
                     failures.append((result["filename"], result["error"]))
@@ -365,8 +373,9 @@ def _summarize_step(today, log, article_list=None, missing_notes=None, should_st
         index_error = f"{type(exc).__name__}: {exc}"
         log(f"✗ 索引页生成失败: {index_error}")
 
-    return {"processed": processed, "failed": len(failures), "failures": failures,
-            "path": index_path, "entries": len(entries), "index_error": index_error}
+    return {"processed": processed, "skipped": skipped, "failed": len(failures),
+            "failures": failures, "path": index_path, "entries": len(entries),
+            "index_error": index_error}
 
 
 def run_archive(selected_steps, today, log, on_progress=None, should_stop=None):
@@ -565,7 +574,8 @@ def run_archive(selected_steps, today, log, on_progress=None, should_stop=None):
             for name, _ in convert_unknown:
                 log(f"    [未知来源] {name} - 未添加解析策略")
     if summary_result:
-        log(f"AI 摘要: {summary_result['processed']} 篇")
+        log(f"AI 摘要: {summary_result['processed']} 篇"
+            f"（其中跳过已有摘要 {summary_result.get('skipped', 0)} 篇）")
         summary_failures = summary_result.get("failures", [])
         if summary_failures:
             log(f"AI 摘要失败: {len(summary_failures)} 篇")

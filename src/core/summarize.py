@@ -3,14 +3,14 @@
 每日 HTML 文档总结脚本
 功能：
 1. 扫描当天日期文件夹下的所有 .html 文章（排除当天索引页）
-2. 并行调用 AI API 生成摘要
+2. 并行调用 AI API 生成摘要（默认断点续跑：已有摘要的文章跳过，--force 全部重算）
 3. 将摘要注入每篇文章的 <section class="ai-summary" data-folo="summary"> 区块
-   （每次运行都重新生成并覆盖旧摘要，同一天重跑不会跳过）
 """
 
 import html
 import re
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +21,16 @@ from utils import load_config, fix_encoding, OUTPUT_BASE_DIR
 
 # 并发数（可根据 API 限制调整）
 MAX_WORKERS = 10
+
+# 重试等待基数（秒）：第 n 次失败后等待 RETRY_BACKOFF * 2^n
+RETRY_BACKOFF = 2
+
+# 服务端临时故障可重试的状态码（密钥/参数错误等不在其中，重试无意义）
+_RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
+
+# 是否让模型先「思考」再作答。摘要任务不需要——实测同一条 1.7k 字文章，
+# 关掉后 completion 从 1626 降到 216 token、耗时从 9.5s 降到 2.6s，摘要质量不变。
+THINKING_BODY = {"thinking": {"type": "disabled"}}
 
 # 文件写入锁
 file_lock = Lock()
@@ -37,6 +47,8 @@ def create_client(config):
     return OpenAI(
         api_key=config["api_key"],
         base_url=config["base_url"],
+        timeout=60.0,
+        max_retries=0,
     )
 
 
@@ -105,8 +117,19 @@ def _summary_to_html(summary):
     return "\n".join(parts)
 
 
+def _is_retryable(exc):
+    """判断异常是否值得重试：网络类错误与 5xx/429 可重试，密钥、参数错误不重试"""
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        return True
+    try:
+        return int(status) in _RETRYABLE_STATUS
+    except (TypeError, ValueError):
+        return False
+
+
 def summarize_article(client, model, content, filename, max_retries=3):
-    """调用 API 生成文章摘要，支持重试"""
+    """调用 API 生成文章摘要；可重试错误按 RETRY_BACKOFF 递增等待后重试"""
     truncated = content[:3000] if len(content) > 3000 else content
 
     system_prompt = """你是一个专业的文章摘要助手。你的任务是为文章撰写简洁、准确的概括性总结。
@@ -161,6 +184,8 @@ def summarize_article(client, model, content, filename, max_retries=3):
 文章内容：
 {truncated}"""
 
+    last_error = "未知错误"
+
     for attempt in range(max_retries):
         try:
             response = client.chat.completions.create(
@@ -172,6 +197,7 @@ def summarize_article(client, model, content, filename, max_retries=3):
                 max_completion_tokens=2048,
                 temperature=1.0,
                 top_p=0.95,
+                extra_body=THINKING_BODY,
                 stream=False,
             )
             choice = response.choices[0]
@@ -179,18 +205,24 @@ def summarize_article(client, model, content, filename, max_retries=3):
             finish_reason = choice.finish_reason
 
             if result and result.strip():
-                if finish_reason == "length":
-                    if attempt < max_retries - 1:
-                        continue
-                return result.strip()
-            if attempt < max_retries - 1:
-                continue
+                if finish_reason != "length":
+                    return result.strip()
+                last_error = "输出被截断（finish_reason=length）"
+            else:
+                last_error = "API 返回空内容"
         except Exception as e:
-            if attempt < max_retries - 1:
-                continue
-            return None, str(e)
+            last_error = f"{type(e).__name__}: {e}"
+            if not _is_retryable(e):
+                print(f"  ✗ {filename}: 不可重试的错误（{last_error[:80]}）", flush=True)
+                return None, last_error
 
-    return None, "API 返回空内容或截断（已重试 {} 次）".format(max_retries)
+        if attempt < max_retries - 1:
+            delay = RETRY_BACKOFF * (2 ** attempt)
+            print(f"  ↻ {filename}: {last_error[:60]}，{delay}s 后重试"
+                  f"（第 {attempt + 2}/{max_retries} 次）", flush=True)
+            time.sleep(delay)
+
+    return None, f"重试 {max_retries} 次仍失败：{last_error}"
 
 
 def write_summary_to_html(html_file, summary):
@@ -223,8 +255,22 @@ def write_summary_to_html(html_file, summary):
         html_file.write_text(content, encoding="utf-8")
 
 
-def process_article(client, model, html_file, date):
-    """处理单篇文章：AI 摘要 → 注入 HTML 摘要区块"""
+def _existing_summary_text(html_content):
+    """取出 HTML 中已有摘要区块的纯文本；无摘要区块或内容为空时返回空串"""
+    m = _SUMMARY_SECTION_RE.search(html_content)
+    if not m:
+        return ""
+    inner = re.sub(r"<br\s*/?>", "\n", m.group(2), flags=re.IGNORECASE)
+    inner = re.sub(r"</p>", "\n", inner, flags=re.IGNORECASE)
+    inner = re.sub(r"<[^>]+>", "", inner)
+    return html.unescape(inner).strip()
+
+
+def process_article(client, model, html_file, date, force=False):
+    """处理单篇文章：AI 摘要 → 注入 HTML 摘要区块
+
+    默认断点续跑：已有摘要的文章直接复用，不再调用 API；force=True 时全部重算。
+    """
     filename = html_file.name
     display_title = extract_display_title(filename)
     source = extract_source(filename)
@@ -237,8 +283,19 @@ def process_article(client, model, html_file, date):
     if not content.strip():
         return {"success": False, "filename": filename, "source": source, "error": "文件内容为空"}
 
-    # 每次都重新调用 API 生成摘要（输入为纯文本，避免样式/标签干扰），写入时覆盖旧区块
-    # 即同一天重跑不会因「已有摘要」而跳过
+    if not force:
+        existing = _existing_summary_text(content)
+        if existing:
+            return {
+                "success": True,
+                "skipped": True,
+                "filename": filename,
+                "display_title": display_title,
+                "source": source,
+                "summary": existing,
+            }
+
+    # 输入为纯文本（避免样式/标签干扰），写入时覆盖旧摘要区块
     result = summarize_article(client, model, _extract_text_for_llm(content), filename)
 
     if isinstance(result, tuple):
@@ -259,15 +316,15 @@ def process_article(client, model, html_file, date):
 def main():
     limit = None
     date_str = None
+    force = False
 
-    args = sys.argv[1:]
-    i = 0
-    while i < len(args):
-        if args[i].isdigit():
-            limit = int(args[i])
-        elif "年" in args[i] and "月" in args[i] and "日" in args[i]:
-            date_str = args[i]
-        i += 1
+    for arg in sys.argv[1:]:
+        if arg in ("--force", "-f"):
+            force = True
+        elif arg.isdigit():
+            limit = int(arg)
+        elif "年" in arg and "月" in arg and "日" in arg:
+            date_str = arg
 
     config = load_config()
     client = create_client(config)
@@ -283,6 +340,7 @@ def main():
         print(f"限制处理数量: {limit} 篇")
     print(f"日期: {today}")
     print(f"目标文件夹: {folder}")
+    print(f"模式: {'全部重算（--force）' if force else '断点续跑（已有摘要的跳过）'}")
     print()
 
     html_files = scan_html_files(folder, today)
@@ -309,11 +367,12 @@ def main():
     print()
 
     processed = 0
+    skipped = 0
     failed = 0
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_to_file = {
-            executor.submit(process_article, client, model, html_file, today): html_file
+            executor.submit(process_article, client, model, html_file, today, force): html_file
             for html_file in html_files
         }
 
@@ -322,15 +381,19 @@ def main():
 
             if result["success"]:
                 processed += 1
-                print(f"  ✓ [{processed}/{total_count}] {result['filename']}", flush=True)
-                print(f"    {result['summary'][:50]}...", flush=True)
+                if result.get("skipped"):
+                    skipped += 1
+                    print(f"  · [跳过] {result['filename']}", flush=True)
+                else:
+                    print(f"  ✓ [{processed}/{total_count}] {result['filename']}", flush=True)
+                    print(f"    {result['summary'][:50]}...", flush=True)
             else:
                 failed += 1
                 print(f"  ✗ {result['filename']}: {result['error']}", flush=True)
 
     print(f"\n{'='*50}")
     print("总结完成！")
-    print(f"成功: {processed} 篇")
+    print(f"成功: {processed} 篇（其中跳过已有摘要 {skipped} 篇）")
     if failed > 0:
         print(f"失败: {failed} 篇")
     print("摘要已注入各文章的摘要区块")
